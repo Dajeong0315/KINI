@@ -1,0 +1,40 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated audio and local test audio
+output/audio/*
+!output/audio/.gitkeep
+samples/audio/*
+!samples/audio/.gitkeep
+
+# Downloaded local voice models
+models/
+
+# Editor and OS files
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local working material not part of the voice-assistant release
+.ppt-build/
+archive/
+reports/
+research_notes/
+runs/
+plan.md
+progress.md
+docs/benchmarks/
+docs/images/
+docs/presentation/
+docs/research/
+output/**
+!output/audio/
+!output/audio/.gitkeep

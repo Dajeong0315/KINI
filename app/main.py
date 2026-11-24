@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+import os
+import tempfile
+from pathlib import Path
+
+from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request, send_from_directory
+from werkzeug.utils import secure_filename
+
+from app.services.errors import ServiceError
+from app.services.fact_responder import fact_answer
+from app.services.food_safety import nutrition_for_food, recipes_for_inventory
+from app.services.inventory import inventory_context, load_inventory, matching_items
+from app.services.local_stt import transcribe_audio
+from app.services.local_tts import OUTPUT_DIR, synthesize_speech
+from app.services.ollama import ask_ollama, configured_model
+from app.services.response_policy import FALLBACK_REPLY, enforce_response_policy
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".ogg", ".mp4"}
+
+
+def _answer_question(question: str) -> dict[str, object]:
+    question = question.strip()
+    if not question:
+        raise ServiceError("질문을 입력해 주세요.")
+    if len(question) > 500:
+        raise ServiceError("질문은 500자 이내로 입력해 주세요.")
+
+    inventory = load_inventory()
+    confirmed = fact_answer(question, inventory)
+    if confirmed:
+        if not confirmed.get("llm_rephrase"):
+            return {"question": question, "model": None, **confirmed}
+        try:
+            raw_answer, _metadata = ask_ollama(
+                question,
+                inventory_context(confirmed["selected_items"]),
+                confirmed.get("decision_facts"),
+            )
+            answer = enforce_response_policy(
+                raw_answer,
+                [item["name"] for item in confirmed["selected_items"]],
+                question,
+                required_phrases=confirmed.get("required_phrases"),
+            )
+        except ServiceError:
+            answer = confirmed["answer"]
+        return {
+            "question": question,
+            "answer": answer if answer != FALLBACK_REPLY else confirmed["answer"],
+            "selected_items": confirmed["selected_items"],
+            "model": configured_model(),
+            "answer_source": confirmed["answer_source"],
+        }
+
+    selected_items = matching_items(question, inventory)
+    raw_answer, _metadata = ask_ollama(question, inventory_context(selected_items))
+    answer = enforce_response_policy(
+        raw_answer, [item["name"] for item in selected_items], question
+    )
+    return {
+        "question": question,
+        "answer": answer,
+        "selected_items": selected_items,
+        "model": configured_model(),
+        "answer_source": "ollama",
+    }
+
+
+@app.get("/")
+def index():
+    return render_template("index.html", model=configured_model())
+
+
+@app.get("/api/inventory")
+def get_inventory():
+    try:
+        return jsonify(load_inventory())
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/recipes")
+def get_recipes():
+    try:
+        inventory = load_inventory()
+        return jsonify({"recipes": recipes_for_inventory(inventory["items"]), "source": "COOKRCP01"})
+    except (ServiceError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.get("/api/nutrition")
+def get_nutrition():
+    food_name = request.args.get("food_name", "").strip()
+    if not food_name:
+        return jsonify({"error": "조회할 식품명을 선택해 주세요."}), 400
+    try:
+        nutrition = nutrition_for_food(food_name)
+        if nutrition is None:
+            return jsonify({"error": "일치하는 영양성분 데이터를 찾지 못했습니다."}), 404
+        return jsonify(nutrition)
+    except ServiceError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.post("/api/chat")
+def chat():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(_answer_question(str(payload.get("question", ""))))
+    except (ServiceError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.post("/api/voice")
+def voice_chat():
+    uploaded = request.files.get("audio")
+    if not uploaded or not uploaded.filename:
+        return jsonify({"error": "음성 파일을 선택해 주세요."}), 400
+    suffix = Path(uploaded.filename).suffix.lower()
+    if suffix not in ALLOWED_AUDIO_EXTENSIONS:
+        return jsonify({"error": "지원하지 않는 파일 형식입니다."}), 400
+
+    filename = secure_filename(uploaded.filename) or f"audio{suffix}"
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_path = Path(temp_file.name)
+            uploaded.save(temp_file)
+        transcript = transcribe_audio(temp_path)
+        result = _answer_question(transcript)
+        result["transcript"] = transcript
+        return jsonify(result)
+    except (ServiceError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
+
+
+@app.post("/api/tts")
+def text_to_speech():
+    payload = request.get_json(silent=True) or {}
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        return jsonify({"error": "음성으로 만들 답변이 없습니다."}), 400
+    try:
+        filename = synthesize_speech(text)
+        return jsonify({"audio_url": f"/audio/{filename}"})
+    except ServiceError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.get("/audio/<path:filename>")
+def get_audio(filename: str):
+    mime_types = {".wav": "audio/wav", ".mp3": "audio/mpeg"}
+    mimetype = mime_types.get(Path(filename).suffix.lower(), "application/octet-stream")
+    return send_from_directory(OUTPUT_DIR, filename, mimetype=mimetype, as_attachment=False)
+
+
+@app.errorhandler(413)
+def file_too_large(_error):
+    return jsonify({"error": "음성 파일은 25MB 이하여야 합니다."}), 413
+
+
+if __name__ == "__main__":
+    debug = os.getenv("FLASK_DEBUG") == "1"
+    app.run(host="127.0.0.1", port=5000, debug=debug)

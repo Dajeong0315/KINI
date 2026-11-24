@@ -1,0 +1,41 @@
+{
+  "updated_at": "2026-11-23",
+  "items": [
+    {
+      "id": "rice-cake",
+      "name": "떡",
+      "quantity": 300,
+      "unit": "g",
+      "location": "냉동실",
+      "registered_at": "2026-11-23",
+      "use_by": null
+    },
+    {
+      "id": "mushroom",
+      "name": "버섯",
+      "quantity": 200,
+      "unit": "g",
+      "location": "냉장실",
+      "registered_at": "2026-11-23",
+      "use_by": null
+    },
+    {
+      "id": "gochujang",
+      "name": "고추장",
+      "quantity": 1,
+      "unit": "통",
+      "location": "냉장실",
+      "registered_at": "2026-11-23",
+      "use_by": null
+    },
+    {
+      "id": "egg",
+      "name": "달걀",
+      "quantity": 4,
+      "unit": "개",
+      "location": "냉장실",
+      "registered_at": "2026-11-23",
+      "use_by": null
+    }
+  ]
+}

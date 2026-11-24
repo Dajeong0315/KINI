@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>냉장고 비서</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <a class="brand" href="/" aria-label="냉장고 비서 홈">냉장고 비서</a>
+        <p>지금 있는 재료로, 짧고 분명하게</p>
+      </header>
+
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="status"><span></span> 로컬 재고 연결됨</p>
+          <h1 id="page-title">오늘의 냉장고,<br />무엇을 만들까요?</h1>
+          <p class="lede">재고는 기기 안의 JSON에서 확인하고, 답변은 두 문장 안에서만 드립니다.</p>
+        </div>
+        <dl class="model-card">
+          <div><dt>현재 모델</dt><dd id="model-name">{{ model }}</dd></div>
+          <div><dt>음성 입력</dt><dd>선택 기능</dd></div>
+        </dl>
+      </section>
+
+      <section class="workspace" aria-label="냉장고 대화">
+        <aside class="inventory-panel">
+          <div class="section-title"><h2>현재 재고</h2><button id="refresh-inventory" class="text-button">새로고침</button></div>
+          <p class="inventory-note">수량과 소비기한은 JSON에 적힌 값만 표시합니다.</p>
+          <ul id="inventory-list" class="inventory-list" aria-live="polite"></ul>
+          <div id="nutrition-card" class="nutrition-card" hidden aria-live="polite"></div>
+        </aside>
+
+        <section class="conversation-panel" aria-labelledby="ask-title">
+          <div class="section-title"><h2 id="ask-title">물어보기</h2><span class="two-lines">최대 2문장 답변</span></div>
+          <form id="chat-form">
+            <label for="question">예: 떡과 고추장으로 매콤한 메뉴를 추천해줘.</label>
+            <textarea id="question" name="question" maxlength="500" placeholder="냉장고 재료에 관해 질문해 주세요." required></textarea>
+            <div class="form-actions">
+              <button class="primary" type="submit">대화 시작</button>
+              <span id="chat-state" class="form-state" aria-live="polite"></span>
+            </div>
+          </form>
+
+          <div id="answer-card" class="answer-card empty" aria-live="polite">
+            <p class="answer-label">답변</p>
+            <p id="answer-text">질문을 입력하면 이곳에 답변이 표시됩니다.</p>
+            <div id="answer-meta" class="answer-meta"></div>
+            <div class="answer-actions">
+              <button id="speak-button" class="secondary" type="button" disabled>답변 음성 만들기</button>
+              <a id="audio-download" hidden download>WAV 다운로드</a>
+            </div>
+            <audio id="audio-player" controls hidden></audio>
+          </div>
+
+          <details class="voice-box">
+            <summary>준비된 음성 파일로 질문하기 <span>로컬 Whisper 사용</span></summary>
+            <form id="voice-form">
+              <label for="audio-file">MP3, WAV, M4A, WebM, OGG 또는 MP4 · 최대 25MB</label>
+              <input id="audio-file" name="audio" type="file" accept="audio/*,video/mp4" required />
+              <button class="secondary" type="submit">음성 파일 전사하기</button>
+              <span id="voice-state" class="form-state" aria-live="polite"></span>
+            </form>
+          </details>
+        </section>
+      </section>
+
+      <section class="recipe-panel" aria-labelledby="recipe-title">
+        <div class="section-title">
+          <div>
+            <h2 id="recipe-title">재고로 찾은 레시피</h2>
+            <p>식품안전나라 COOKRCP01에서 재료 정보가 겹치는 레시피를 찾습니다.</p>
+          </div>
+          <button id="recipe-button" class="primary" type="button">레시피 찾기</button>
+        </div>
+        <span id="recipe-state" class="form-state" aria-live="polite"></span>
+        <div id="recipe-list" class="recipe-list"></div>
+      </section>
+
+      <footer>LLM과 재고 데이터는 로컬에서 처리됩니다. 레시피·영양 데이터와 음성 전사·합성은 외부 API 연결 시 클라우드를 사용합니다.</footer>
+    </main>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
