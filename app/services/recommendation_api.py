@@ -5,8 +5,9 @@ from flask import Blueprint, jsonify, request
 from pydantic import ValidationError
 from .recommendation_repository import open_db, members
 from .recommendation_models import RecommendationRequest, MealSessionRequest, MealRecordRequest, ConversationRequest, MessageRequest, FeedbackRequest, CookingAdjustmentRequest, CookingSessionRequest, CookingChangeRequest, CookingCompleteRequest, CookingQuestionRequest, InventoryNormalizeRequest, InventoryItemRequest
-from .recommendation_engine import recommend, NUTRIENTS
+from .recommendation_engine import recommend, persist_recommendation, NUTRIENTS
 from .recommendation_llm import explain_recommendation, parse_recommendation_request, extract_preference_signal
+from .ai.recommendation_chain import enrich_with_ai
 from .personalization import add_evidence, aggregate, record_recipe, recipe_features, update_summary
 from . import cooking
 from .errors import ServiceError
@@ -115,8 +116,13 @@ def voice_recommendation():
         parsed=RecommendationRequest.model_validate(data)
     except Exception:
         return jsonify({'transcript':transcript,'error':'음성 요청을 해석하지 못했습니다. 조건을 확인해 구조화된 추천 요청으로 다시 보내 주세요.'}),422
-    with open_db() as db: result=recommend(db,parsed.model_dump())
-    result.update({'transcript':transcript,'interpreted_request':parsed.model_dump(),'interpretation':'ollama','explanation':explain_recommendation(result)})
+    with open_db() as db:
+        result=recommend(db,parsed.model_dump(),persist=False)
+        result=enrich_with_ai(parsed.model_dump(),result)
+        result=persist_recommendation(db,parsed.model_dump(),result)
+    # Transcript remains in the local API response for this legacy voice flow;
+    # it is never included in the external-AI payload.
+    result.update({'transcript':transcript,'interpreted_request':parsed.model_dump(),'interpretation':'ollama'})
     return jsonify(result),201
 
 @api.post('/api/cooking-sessions')
@@ -194,8 +200,10 @@ def create_recommendation():
         try: obj=parse_recommendation_request(payload['text'])
         except Exception: return jsonify({'error':'자연어 해석에 실패했습니다. 구조화된 요청을 입력해 주세요.'}),400
     else: obj=RecommendationRequest.model_validate(payload)
-    with open_db() as db: result=recommend(db,obj.model_dump())
-    result['explanation']=explain_recommendation(result)
+    with open_db() as db:
+        result=recommend(db,obj.model_dump(),persist=False)
+        result=enrich_with_ai(obj.model_dump(),result)
+        result=persist_recommendation(db,obj.model_dump(),result)
     return jsonify(result),201
 
 @api.get('/api/recommendations/<int:request_id>')
@@ -205,14 +213,15 @@ def get_recommendation(request_id):
         pointer=db.execute('SELECT nutrition_release_id,allergen_reference_version_id FROM data_release_pointers WHERE id=1').fetchone()
     if not row: return jsonify({'error':'추천 요청을 찾을 수 없습니다.'}),404
     result=json.loads(row[0])
+    if result.get('status') == 'recommendations_available' and not result.get('ai_explanation'):
+        result.update({'status':'stale_unvalidated','recommendations':[], 'requires_confirmation':True, 'message':'저장된 추천은 현재 정보로 다시 검증해야 합니다. 다시 추천받아 주세요.'})
     if 'data_quality' not in result:
         result.update({'status':'stale_unvalidated','data_quality':'confirmation_required','requires_confirmation':True,'warnings':['이전 규칙으로 저장된 결과입니다. 현재 정보로 다시 추천받으세요.']})
         for candidate in result.get('recommendations',[]):
             candidate.update({'data_quality':'confirmation_required','requires_confirmation':True,'warnings':['현재 기준으로 재검증되지 않았습니다.']})
-    elif row['nutrition_data_release_id'] != pointer['nutrition_release_id'] or row['allergen_reference_version_id'] != pointer['allergen_reference_version_id']:
+    elif result.get('status') == 'recommendations_available' and (row['nutrition_data_release_id'] != pointer['nutrition_release_id'] or row['allergen_reference_version_id'] != pointer['allergen_reference_version_id']):
         result.update({'status':'stale_unvalidated','requires_confirmation':True})
         result.setdefault('warnings',[]).append('Published reference release changed; rerun the recommendation to revalidate.')
-    result['explanation']=explain_recommendation(result)
     return jsonify(result)
 
 @api.post('/api/meal-records')
@@ -275,8 +284,10 @@ def add_message(session_id):
 def add_feedback(request_id):
     obj=validated(FeedbackRequest)
     with open_db() as db:
-        row=db.execute('SELECT household_id,request_json FROM recommendation_requests WHERE id=?', (request_id,)).fetchone()
+        row=db.execute('SELECT household_id,request_json,result_json FROM recommendation_requests WHERE id=?', (request_id,)).fetchone()
         if not row: return jsonify({'error':'추천 요청을 찾을 수 없습니다.'}),404
+        stored=json.loads(row['result_json'])
+        if stored.get('status') != 'recommendations_available' or not stored.get('ai_explanation'): raise ValueError('확인된 추천이 아닙니다.')
         if not db.execute('SELECT 1 FROM recommendation_candidates WHERE request_id=? AND recipe_id=?', (request_id,obj.candidate_recipe_id)).fetchone(): raise ValueError('해당 요청에서 표시된 후보가 아닙니다.')
         if obj.member_id and obj.member_id not in json.loads(row['request_json'])['participant_ids']: raise ValueError('추천에 참여하지 않은 구성원입니다.')
         if obj.action=='rated' and obj.rating is None: raise ValueError('별점이 필요합니다.')

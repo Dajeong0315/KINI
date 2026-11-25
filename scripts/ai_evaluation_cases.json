@@ -1,0 +1,17 @@
+[
+  {
+    "simulated_model_outcome": "valid",
+    "request": {"household_id": 1, "participant_ids": [1], "meal_type": "dinner", "purchase_allowed": false},
+    "rule_result": {"status": "recommendations_available", "recommendations": [{"recipe_id": 1, "name": "sample", "cook_time_minutes": 20, "nutrition_per_serving": {"sodium_mg": 200}, "warnings": []}], "excluded": [], "validated_constraint_codes": []}
+  },
+  {
+    "simulated_model_outcome": "malformed_json",
+    "request": {"household_id": 1, "participant_ids": [1], "meal_type": "dinner", "purchase_allowed": false},
+    "rule_result": {"status": "recommendations_available", "recommendations": [{"recipe_id": 1, "name": "sample", "cook_time_minutes": 20, "nutrition_per_serving": {"sodium_mg": 200}, "warnings": []}], "excluded": [], "validated_constraint_codes": []}
+  },
+  {
+    "simulated_model_outcome": "candidate_mismatch",
+    "request": {"household_id": 1, "participant_ids": [1], "meal_type": "dinner", "purchase_allowed": false},
+    "rule_result": {"status": "recommendations_available", "recommendations": [{"recipe_id": 1, "name": "sample", "cook_time_minutes": 20, "nutrition_per_serving": {"sodium_mg": 200}, "warnings": []}], "excluded": [], "validated_constraint_codes": []}
+  }
+]
