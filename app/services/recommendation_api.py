@@ -1,7 +1,8 @@
-﻿from datetime import datetime
+﻿from contextlib import closing
+from datetime import datetime
 import json, sqlite3, tempfile
 from pathlib import Path
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from pydantic import ValidationError
 from .recommendation_repository import open_db, members
 from .recommendation_models import RecommendationRequest, MealSessionRequest, MealRecordRequest, ConversationRequest, MessageRequest, FeedbackRequest, CookingAdjustmentRequest, CookingSessionRequest, CookingChangeRequest, CookingCompleteRequest, CookingQuestionRequest, InventoryNormalizeRequest, InventoryItemRequest
@@ -145,8 +146,26 @@ def cooking_change(session_id):
 @api.post('/api/cooking-sessions/<int:session_id>/complete')
 @errors
 def cooking_complete(session_id):
-    obj=validated(CookingCompleteRequest)
-    with open_db() as db: return jsonify(cooking.complete(db,session_id,obj)),201
+    obj = validated(CookingCompleteRequest)
+    inventory_token = None
+    if 'data_status' in current_app.blueprints:
+        scheme, _, token = request.headers.get('Authorization', '').partition(' ')
+        if scheme.lower() != 'bearer' or not token.strip():
+            return jsonify({'error': '로컬 로그인 세션이 필요합니다.'}), 401
+        inventory_token = token.strip()
+
+    try:
+        with closing(open_db()) as db, db:
+            result = cooking.complete(db, session_id, obj, inventory_token=inventory_token)
+    except PermissionError:
+        return jsonify({'error': '세션 또는 가구 권한을 확인하세요.'}), 403
+    except cooking.InventoryConfirmationRequired as error:
+        return jsonify({
+            'error': str(error),
+            'code': 'inventory_confirmation_required',
+            'ingredients': error.ingredients,
+        }), 409
+    return jsonify(result), 201
 
 @api.post('/api/cooking-sessions/<int:session_id>/questions')
 @errors

@@ -1,3 +1,4 @@
+from flask import Flask
 import pytest
 
 @pytest.fixture
@@ -5,7 +6,8 @@ def setup(monkeypatch,tmp_path):
     monkeypatch.setenv('KINI_DB_PATH',str(tmp_path/'db.sqlite3'))
     import app.services.recommendation_api as api
     monkeypatch.setattr(api,'explain_recommendation',lambda _: '추천')
-    from app.main import app
+    app = Flask(__name__)
+    app.register_blueprint(api.api)
     client=app.test_client()
     request={'household_id':1,'participant_ids':[3],'meal_type':'dinner'}
     recommendation=client.post('/api/recommendations',json=request).json
