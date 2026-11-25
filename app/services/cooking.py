@@ -58,6 +58,8 @@ def create(db, obj):
     meal = db.execute('SELECT * FROM meal_sessions WHERE id=?',(obj.meal_session_id,)).fetchone()
     request = db.execute('SELECT * FROM recommendation_requests WHERE id=?',(obj.recommendation_request_id,)).fetchone()
     if not meal or not request or meal['household_id']!=request['household_id']: raise ValueError('같은 가구의 추천과 식사 세션이 필요합니다.')
+    stored = json.loads(request['result_json'])
+    if stored.get('status') != 'recommendations_available' or not stored.get('ai_explanation'): raise ValueError('확인된 추천이 아닙니다.')
     ids = {r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=?',(obj.meal_session_id,))}
     if ids != set(json.loads(request['request_json'])['participant_ids']): raise ValueError('추천과 식사 참여자가 일치해야 합니다.')
     if not db.execute('SELECT 1 FROM recommendation_candidates WHERE request_id=? AND recipe_id=?',(obj.recommendation_request_id,obj.recipe_id)).fetchone(): raise ValueError('표시된 추천 후보가 아닙니다.')

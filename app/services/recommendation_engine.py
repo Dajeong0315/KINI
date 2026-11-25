@@ -12,7 +12,7 @@ from .data_quality import inspect_ingredient
 RULES_VERSION='1.3-data-quality'
 NUTRIENTS=('energy_kcal','protein_g','carbohydrate_g','fat_g','sodium_mg')
 
-def recommend(db, req):
+def recommend(db, req, *, persist=True):
     release_pointer=db.execute('SELECT nutrition_release_id,allergen_reference_version_id FROM data_release_pointers WHERE id=1').fetchone()
     nutrition_release_id=release_pointer['nutrition_release_id'] if release_pointer else None
     allergen_reference_version_id=release_pointer['allergen_reference_version_id'] if release_pointer else None
@@ -101,12 +101,25 @@ def recommend(db, req):
     snapshot['allergen_aliases']=[dict(r) for r in db.execute('SELECT * FROM allergen_aliases ORDER BY alias')]
     fingerprint=hashlib.sha256(json.dumps(snapshot,sort_keys=True,ensure_ascii=False).encode('utf-8')).hexdigest()
     provenance='published official nutrition is available only through explicit approved mappings' if nutrition_release_id else 'demo/local nutrition; not official data'
-    result={'rules_version':RULES_VERSION,'prompt_version':PROMPT_VERSION,'db_version':db.execute("SELECT value FROM metadata WHERE key='db_version'").fetchone()[0], 'input_snapshot_hash':fingerprint, 'participant_ids':ids,'profile_snapshot':people,'inventory_snapshot':inventory,'recommendations':candidates[:3],'excluded':excluded,'as_of':today,'nutrition_data_release_id':nutrition_release_id,'allergen_reference_version_id':allergen_reference_version_id,'data_provenance_summary':provenance}
+    validated_constraint_codes=[]
+    for raw_ingredient in req.get('excluded_ingredients',[]):
+        if not isinstance(raw_ingredient,str): continue
+        row=db.execute('SELECT id FROM ingredients WHERE name=? AND active=1',(raw_ingredient,)).fetchone()
+        if row: validated_constraint_codes.append(f'exclude_ingredient:ingredient_{row[0]}')
+    if candidates: validated_constraint_codes.append('nutrition:locally_validated')
+    result={'rules_version':RULES_VERSION,'prompt_version':PROMPT_VERSION,'db_version':db.execute("SELECT value FROM metadata WHERE key='db_version'").fetchone()[0], 'input_snapshot_hash':fingerprint, 'participant_ids':ids,'profile_snapshot':people,'inventory_snapshot':inventory,'recommendations':candidates[:3],'excluded':excluded,'as_of':today,'nutrition_data_release_id':nutrition_release_id,'allergen_reference_version_id':allergen_reference_version_id,'data_provenance_summary':provenance,'validated_constraint_codes':sorted(set(validated_constraint_codes))}
     result.update({'status':'recommendations_available' if candidates else 'no_safe_recommendation', 'data_quality':'demo_data' if any(c['data_quality']=='demo_data' for c in candidates[:3]) else 'confirmation_required' if not candidates or any(c['requires_confirmation'] for c in candidates[:3]) else 'verified', 'requires_confirmation':not candidates or any(c['requires_confirmation'] for c in candidates[:3]), 'warnings':sorted({w for c in candidates[:3] for w in c['warnings']}), 'excluded_candidates':excluded})
+    return persist_recommendation(db, req, result) if persist else result
+
+
+def persist_recommendation(db, req, result):
+    """Publish only the final AI-chain outcome, atomically with visible candidates."""
+    result = dict(result)
+    candidates = result.get('recommendations', []) if result.get('status') == 'recommendations_available' else []
     with db:
-        cur=db.execute('INSERT INTO recommendation_requests(household_id,request_json,result_json,nutrition_data_release_id,allergen_reference_version_id) VALUES (?,?,?,?,?)',(req['household_id'],json.dumps(req,ensure_ascii=False),'',nutrition_release_id,allergen_reference_version_id))
+        cur=db.execute('INSERT INTO recommendation_requests(household_id,request_json,result_json,nutrition_data_release_id,allergen_reference_version_id) VALUES (?,?,?,?,?)',(req['household_id'],json.dumps(req,ensure_ascii=False),'',result.get('nutrition_data_release_id'),result.get('allergen_reference_version_id')))
         result['request_id']=cur.lastrowid
         db.execute('UPDATE recommendation_requests SET result_json=? WHERE id=?',(json.dumps(result,ensure_ascii=False),cur.lastrowid))
-        db.executemany('INSERT INTO recommendation_candidates VALUES (?,?,?,?)',[(cur.lastrowid,c['recipe_id'],i,json.dumps(c,ensure_ascii=False)) for i,c in enumerate(candidates[:3],1)])
-        db.executemany("INSERT INTO recommendation_feedback(recommendation_request_id,candidate_recipe_id,action) VALUES (?,?,'shown')", [(cur.lastrowid,c['recipe_id']) for c in candidates[:3]])
+        db.executemany('INSERT INTO recommendation_candidates VALUES (?,?,?,?)',[(cur.lastrowid,c['recipe_id'],i,json.dumps(c,ensure_ascii=False)) for i,c in enumerate(candidates,1)])
+        db.executemany("INSERT INTO recommendation_feedback(recommendation_request_id,candidate_recipe_id,action) VALUES (?,?,'shown')", [(cur.lastrowid,c['recipe_id']) for c in candidates])
     return result
