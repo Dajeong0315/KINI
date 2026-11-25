@@ -39,6 +39,17 @@ CREATE TABLE IF NOT EXISTS inferred_preferences(id INTEGER PRIMARY KEY, househol
 CREATE UNIQUE INDEX IF NOT EXISTS preference_identity ON inferred_preferences(household_id,ifnull(member_id,0),feature_type,feature_value);
 CREATE TABLE IF NOT EXISTS household_behavior_summary(household_id INTEGER PRIMARY KEY REFERENCES households(id), preferred_cook_time_minutes REAL, preferred_meal_types_json TEXT, frequently_used_ingredients_json TEXT, recently_rejected_features_json TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS cooking_sessions(id INTEGER PRIMARY KEY, household_id INTEGER NOT NULL REFERENCES households(id), meal_session_id INTEGER NOT NULL REFERENCES meal_sessions(id), request_id INTEGER NOT NULL REFERENCES recommendation_requests(id), recipe_id INTEGER NOT NULL REFERENCES recipes(id), ingredients_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TEXT, meal_record_id INTEGER REFERENCES meal_records(id));
+-- Imported reference data is deliberately separate from household and demo data.
+CREATE TABLE IF NOT EXISTS data_sources(id INTEGER PRIMARY KEY, source_key TEXT NOT NULL UNIQUE, provider_name TEXT NOT NULL, dataset_name TEXT NOT NULL, source_url TEXT NOT NULL, license_text TEXT, license_url TEXT, expected_format TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS dataset_releases(id INTEGER PRIMARY KEY, data_source_id INTEGER NOT NULL REFERENCES data_sources(id), external_release_id TEXT, source_published_at TEXT, imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, checksum TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('staging','validated','published','retired','failed')), record_count INTEGER NOT NULL DEFAULT 0, accepted_count INTEGER NOT NULL DEFAULT 0, quarantined_count INTEGER NOT NULL DEFAULT 0, notes TEXT);
+CREATE TABLE IF NOT EXISTS import_runs(id INTEGER PRIMARY KEY, data_source_id INTEGER NOT NULL REFERENCES data_sources(id), release_id INTEGER REFERENCES dataset_releases(id), started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, mode TEXT NOT NULL CHECK(mode IN ('dry_run','import','publish')), status TEXT NOT NULL, input_reference TEXT, error_summary TEXT);
+CREATE TABLE IF NOT EXISTS import_quarantine(id INTEGER PRIMARY KEY, release_id INTEGER NOT NULL REFERENCES dataset_releases(id), source_record_key TEXT, reason_code TEXT NOT NULL, safe_error_detail TEXT, raw_reference TEXT, resolved_at TEXT);
+CREATE TABLE IF NOT EXISTS official_food_items(id INTEGER PRIMARY KEY, release_id INTEGER NOT NULL REFERENCES dataset_releases(id), source_food_code TEXT NOT NULL, food_name TEXT NOT NULL, normalized_name TEXT NOT NULL, food_category TEXT, manufacturer TEXT, product_report_number TEXT, serving_reference TEXT, basis_amount_g REAL, source_record_date TEXT, active INTEGER NOT NULL DEFAULT 1, UNIQUE(release_id,source_food_code));
+CREATE TABLE IF NOT EXISTS official_nutrient_values(id INTEGER PRIMARY KEY, official_food_item_id INTEGER NOT NULL REFERENCES official_food_items(id), nutrient_code TEXT NOT NULL, amount REAL NOT NULL, unit TEXT NOT NULL, basis_amount_g REAL, confidence REAL, source_field TEXT, UNIQUE(official_food_item_id,nutrient_code));
+CREATE TABLE IF NOT EXISTS ingredient_official_food_mappings(id INTEGER PRIMARY KEY, ingredient_id INTEGER NOT NULL REFERENCES ingredients(id), official_food_item_id INTEGER NOT NULL REFERENCES official_food_items(id), mapping_method TEXT NOT NULL CHECK(mapping_method IN ('manual','approved_alias','imported_code')), mapping_confidence REAL NOT NULL, approved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, active INTEGER NOT NULL DEFAULT 1, UNIQUE(ingredient_id,official_food_item_id));
+CREATE TABLE IF NOT EXISTS allergen_reference_versions(id INTEGER PRIMARY KEY, source_name TEXT NOT NULL, source_url TEXT NOT NULL, legal_or_reference_version TEXT NOT NULL, effective_date TEXT, imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, checksum TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('staging','validated','published','retired','failed')));
+CREATE TABLE IF NOT EXISTS allergen_reference_items(id INTEGER PRIMARY KEY, version_id INTEGER NOT NULL REFERENCES allergen_reference_versions(id), allergen_code TEXT NOT NULL, display_name_ko TEXT NOT NULL, aliases_json TEXT NOT NULL DEFAULT '[]', active INTEGER NOT NULL DEFAULT 1, UNIQUE(version_id,allergen_code));
+CREATE TABLE IF NOT EXISTS data_release_pointers(id INTEGER PRIMARY KEY CHECK(id=1), nutrition_release_id INTEGER REFERENCES dataset_releases(id), allergen_reference_version_id INTEGER REFERENCES allergen_reference_versions(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 '''
 
 def connect(path=None):
@@ -49,6 +60,11 @@ def connect(path=None):
     return db
 
 def initialize(db, *, seed_demo=None):
+    # Earlier A-only databases used data_sources(code,...). main's official import
+    # owns data_sources(id,source_key,...); preserve both without overwriting data.
+    source_columns = {row['name'] for row in db.execute('PRAGMA table_info(data_sources)')}
+    if 'code' in source_columns and 'source_key' not in source_columns:
+        db.execute('ALTER TABLE data_sources RENAME TO catalog_data_sources')
     db.executescript(SCHEMA)
     migrations = {
         'ingredients': {'canonical_name':'TEXT', 'source_type':"TEXT NOT NULL DEFAULT 'unknown'", 'data_confidence':'REAL', 'is_composite':'INTEGER NOT NULL DEFAULT 0', 'requires_label_check':'INTEGER NOT NULL DEFAULT 0', 'active':'INTEGER NOT NULL DEFAULT 1'},
@@ -78,6 +94,11 @@ def initialize(db, *, seed_demo=None):
         db.execute('ALTER TABLE ingredient_storage_guidelines ADD COLUMN recommended_storage TEXT')
     from .data_platform import migrate
     migrate(db)
+    request_columns = {row['name'] for row in db.execute('PRAGMA table_info(recommendation_requests)')}
+    for name, definition in {'nutrition_data_release_id':'INTEGER', 'allergen_reference_version_id':'INTEGER'}.items():
+        if name not in request_columns:
+            db.execute(f'ALTER TABLE recommendation_requests ADD COLUMN {name} {definition}')
+    db.execute('INSERT OR IGNORE INTO data_release_pointers(id) VALUES (1)')
     db.commit()
     if db.execute('SELECT 1 FROM households LIMIT 1').fetchone(): return
     mode = db.execute("SELECT value FROM metadata WHERE key='dataset_mode'").fetchone()

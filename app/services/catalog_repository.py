@@ -72,7 +72,7 @@ def publish(db, release_id):
     """Explicit operator action. Immutable releases; source pointer is the only swap."""
     with db:
         release = db.execute('''SELECT r.*,s.rights_status FROM data_releases r
-            JOIN data_sources s ON s.code=r.source_code WHERE r.id=?''', (release_id,)).fetchone()
+            JOIN catalog_data_sources s ON s.code=r.source_code WHERE r.id=?''', (release_id,)).fetchone()
         if not release or release['status'] != 'validated':
             raise ValueError('검증을 통과한 release만 배포할 수 있습니다.')
         if release['rights_status'] != 'approved':

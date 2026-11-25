@@ -20,7 +20,7 @@ def food(**overrides):
 
 
 def approved(db):
-    db.execute("UPDATE data_sources SET rights_status='approved' WHERE code='mfds_nutrition'")
+    db.execute("UPDATE catalog_data_sources SET rights_status='approved' WHERE code='mfds_nutrition'")
     db.commit()
 
 
@@ -128,7 +128,7 @@ def test_meal_pins_release_and_snapshot_does_not_change_on_new_import(db):
 
 
 def test_recipe_steps_are_normalized_without_guessing_servings(db):
-    db.execute("UPDATE data_sources SET rights_status='approved' WHERE code='mfds_recipe'")
+    db.execute("UPDATE catalog_data_sources SET rights_status='approved' WHERE code='mfds_recipe'")
     db.commit()
     release = stage(db, 'mfds_recipe', [{'external_id': 'R1', 'kind': 'recipe', 'name': '두부찜',
         'ingredients_text': '두부 100g', 'steps': ['두부를 찐다.']}], source_revision='test')
@@ -143,7 +143,7 @@ def test_cookrcp01_nutrition_keeps_serving_basis_and_missing_values(db):
     recipe = normalize({'RCP_SEQ': '1', 'RCP_NM': '두부찜', 'RCP_PARTS_DTLS': '두부 100g',
         'MANUAL01': '찐다', 'INFO_ENG': '76', 'INFO_NA': ''})
     assert recipe['servings'] is None
-    db.execute("UPDATE data_sources SET rights_status='approved' WHERE code='mfds_recipe'")
+    db.execute("UPDATE catalog_data_sources SET rights_status='approved' WHERE code='mfds_recipe'")
     db.commit()
     release = stage(db, 'mfds_recipe', [recipe], source_revision='test')
     assert validate(db, release) == []

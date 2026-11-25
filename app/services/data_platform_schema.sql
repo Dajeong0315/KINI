@@ -22,16 +22,16 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 CREATE INDEX IF NOT EXISTS auth_session_account ON auth_sessions(account_id,household_id);
 CREATE INDEX IF NOT EXISTS auth_session_expiry ON auth_sessions(expires_at);
 
-CREATE TABLE IF NOT EXISTS data_sources (
+CREATE TABLE IF NOT EXISTS catalog_data_sources (
     code TEXT PRIMARY KEY, name TEXT NOT NULL, documentation_url TEXT NOT NULL,
     rights_status TEXT NOT NULL CHECK(rights_status IN ('review_required','approved'))
 );
-INSERT OR IGNORE INTO data_sources VALUES
+INSERT OR IGNORE INTO catalog_data_sources VALUES
  ('mfds_recipe','식약처 COOKRCP01','https://www.foodsafetykorea.go.kr/api/newDatasetDetail.do?svc_no=COOKRCP01','review_required'),
  ('mfds_nutrition','식약처 식품영양성분DB','https://various.foodsafetykorea.go.kr/nutrient/industry/openApi/info.do','review_required'),
  ('10000recipe','만개의레시피 제휴 데이터','https://www.10000recipe.com/company/intro.html','review_required');
 CREATE TABLE IF NOT EXISTS data_releases (
-    id TEXT PRIMARY KEY, source_code TEXT NOT NULL REFERENCES data_sources(code),
+    id TEXT PRIMARY KEY, source_code TEXT NOT NULL REFERENCES catalog_data_sources(code),
     status TEXT NOT NULL CHECK(status IN ('staging','validated','published','quarantined')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     validation_report TEXT, source_revision TEXT NOT NULL
@@ -95,13 +95,13 @@ CREATE TABLE IF NOT EXISTS catalog_recipe_links (
 );
 CREATE INDEX IF NOT EXISTS catalog_link_recipe ON catalog_recipe_links(release_id,external_id);
 CREATE TABLE IF NOT EXISTS active_data_releases (
-    source_code TEXT PRIMARY KEY REFERENCES data_sources(code),
+    source_code TEXT PRIMARY KEY REFERENCES catalog_data_sources(code),
     release_id TEXT NOT NULL REFERENCES data_releases(id), cache_version INTEGER NOT NULL CHECK(cache_version>0)
 );
 CREATE INDEX IF NOT EXISTS active_release_lookup ON active_data_releases(release_id);
 CREATE TABLE IF NOT EXISTS meal_data_context (
     meal_session_id INTEGER NOT NULL REFERENCES meal_sessions(id),
-    source_code TEXT NOT NULL REFERENCES data_sources(code),
+    source_code TEXT NOT NULL REFERENCES catalog_data_sources(code),
     release_id TEXT NOT NULL REFERENCES data_releases(id),
     PRIMARY KEY(meal_session_id,source_code)
 );
