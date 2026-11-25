@@ -13,6 +13,8 @@ def main():
         day = date.fromisoformat(sys.argv[1]) if len(sys.argv) == 2 else datetime.now(timezone(timedelta(hours=9))).date()
     except ValueError:
         raise SystemExit("날짜는 YYYY-MM-DD 형식이어야 합니다.")
+    if day.weekday() >= 5:
+        raise SystemExit("주말에는 기본 기록 폴더를 만들지 않습니다. 평일 날짜를 지정해 주세요.")
     day_text = day.isoformat()
     target = ROOT / day_text
     target.mkdir(exist_ok=True)
