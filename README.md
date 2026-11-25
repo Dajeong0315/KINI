@@ -135,6 +135,7 @@ curl -X POST http://127.0.0.1:5000/api/recommendations \
 | [A 아키텍처](docs/A_아키텍처.md) | 구성도·ERD·시퀀스·개인정보 경계 |
 | [A 사전 적재·용량 설계](docs/A_사전적재_및_용량설계.md) | 무료 500MB 예산·변화 이력 여유·식약처 사전 수집/매핑 |
 | [A 반복 패턴·캐시 설계](docs/A_반복패턴_및_캐시_설계.md) | 반복 조회 분석·TTL·무효화·Redis·개인정보 경계 |
+| [A Redis 실행·검증](docs/A_Redis_실행_및_검증.md) | 실제 공개 조회 cache 연결·Docker 선택 실행·장애 fallback |
 
 DB 구조·개인정보 세션·식약처 카탈로그 import·Supabase 운영 지표 경계는
 [DB 아키텍처 및 연동 설계](docs/DB_아키텍처_및_연동_설계.md)를 참고하세요.

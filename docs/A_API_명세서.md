@@ -27,6 +27,9 @@ Bearer는 현재 구현 계약이다. 향후 쿠키 인증으로 변경하면 C�
 
 ## 2. 구현된 HTTP API
 
+추가된 공개 카탈로그/cache endpoint는 [Redis 실행 가이드](A_Redis_실행_및_검증.md)의 HTTP API 절을 따른다.
+아래 5개 기존 API의 본문/응답은 유지한다.
+
 | ID | Method | 경로 | 인증 | 성공 |
 |---|---|---|---|---|
 | A-API-01 | GET | `/api/data/status` | 없음 | 200 |
@@ -235,7 +238,8 @@ validate는 통과 시 exit 0, 격리 시 exit 1. 이용 조건 승인 UI/CLI는
 
 반복 조회·cache provider의 내부 계약과 TTL/무효화/공개 데이터 allowlist는
 [반복 패턴 및 캐시 설계](A_반복패턴_및_캐시_설계.md)에 추가했다.
-캐시 전용 HTTP endpoint는 추가하지 않았고, 현재 응답이 cache hit를 제공한다고 가정하지 않는다.
+공개 food/recipe 조회와 인증된 cache 상태 endpoint가 추가됐다. 이들의 cache.status만 hit를 표시하며
+기존 추천 응답이 cache hit를 제공한다고 가정하지 않는다. FAQ/RAG 캐시는 아직 후속 계약이다.
 
 가상 기기 목록/상태, 로그인 HTTP, 대기 이벤트 목록/상세, 카탈로그 검색·원격 동기화,
 Redis 상태/TTL·무효화 API는 예정이다. 경로·schema는 아직 확정하지 않았으므로

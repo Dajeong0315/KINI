@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request
 from pydantic import ValidationError
 from .recommendation_repository import open_db
 from . import inventory_events
+from .public_catalog import service as catalog_service,PublicRecordMissing
 
 api = Blueprint('data_status', __name__)
 
@@ -63,3 +64,38 @@ def inventory_event_reject(db, token, event_id):
 @local_session
 def inventory_snapshot(db, token):
     return jsonify(inventory_events.snapshot(db, token))
+
+
+def _public_detail(kind,external_id):
+    expected={'source'}
+    if set(request.args)-expected:
+        return jsonify({'error':'공개 조회에는 개인 조건이나 원문을 전달할 수 없습니다.'}),400
+    source=request.args.get('source','mfds_nutrition' if kind=='food' else 'mfds_recipe')
+    try:
+        with closing(open_db()) as db:
+            result=catalog_service().read(db,source,kind,external_id)
+        return jsonify({'item':result.item,'cache':{'status':result.cache_status,'backend':result.backend}})
+    except PublicRecordMissing:
+        return jsonify({'error':'배포 승인된 공개 자료를 찾을 수 없습니다.'}),404
+    except ValueError:
+        return jsonify({'error':'공개 자료 ID 또는 서버 설정을 확인하세요.'}),400
+
+
+@api.get('/api/data/catalog/foods/<external_id>')
+def public_food(external_id):
+    return _public_detail('food',external_id)
+
+
+@api.get('/api/data/catalog/recipes/<external_id>')
+def public_recipe(external_id):
+    return _public_detail('recipe',external_id)
+
+
+@api.get('/api/data/cache/status')
+@local_session
+def cache_status(db,token):
+    from .local_identity import authorize
+    authorize(db,token)
+    current=catalog_service()
+    return jsonify({'backend':current.cache.backend,'statistics':current.stats.summary(),
+                    'personal_data_cached':False,'pattern_scope':'bounded_process_local_counts'})

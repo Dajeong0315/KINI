@@ -157,7 +157,8 @@ WHERE s.id=:meal_session_id AND s.household_id=:authorized_household_id;
 
 ## 6. 식품 카탈로그와 영양 기준
 
-data_sources → data_releases → source_records → catalog_foods/catalog_recipes.
+SQLite는 catalog_data_sources → data_releases → source_records → catalog_foods/catalog_recipes다.
+Supabase의 출처 테이블 이름은 data_sources이며, 최신 main의 SQLite data_sources는 별도 공식 import registry다.
 food의 세부 수치는 catalog_food_nutrients, 레시피 순서는 catalog_recipe_steps에 저장한다.
 source_records는 **정규화된 입력 스냅샷**과 SHA-256을 저장한다. HTTP 원본 전체를 보관하는 raw landing 저장소는 아니다.
 source_revision에는 배포 날짜나 원본 파일 버전을 기록한다. 인증키가 포함된 요청 URL은 저장하지 않는다.
@@ -244,7 +245,7 @@ source_records.payload_json은 공개/승인 데이터의 정규화 스냅샷 �
 # 정규화 JSON을 먼저 staging. 실제 API 대량 수집 스크립트는 후속 작업이다.
 .\.venv\Scripts\python.exe scripts/import_catalog.py --db app/data/kini.sqlite3 stage --source mfds_nutrition --revision 2026-11-25 --input public-foods.json
 .\.venv\Scripts\python.exe scripts/import_catalog.py --db app/data/kini.sqlite3 validate --release RELEASE_UUID
-# 이용 조건 검토 후 data_sources.rights_status를 승인한 운영자가 publish 실행
+# 이용 조건 검토 후 SQLite catalog_data_sources.rights_status를 승인한 운영자가 publish 실행
 .\.venv\Scripts\python.exe scripts/import_catalog.py --db app/data/kini.sqlite3 publish --release RELEASE_UUID
 ```
 

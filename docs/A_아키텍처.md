@@ -51,8 +51,9 @@ flowchart TB
   GATE -. 통과한 최소 payload만 .-> AI
 ```
 
-현재 B의 AI 호출은 기존 로컬 Ollama 코드다. 이 그림의 OpenAI/보안 게이트 연결을
-완료된 것으로 해석하지 않는다. 개인 DB에서 Supabase로 복제하는 연결은 없다.
+최신 팀 main f21be76의 B 개인정보 게이트/OpenAI 코드도 이 브랜치에 통합했다.
+위 그림의 B 관련 예정 표시는 최초 설계와 A 공개 자료 provider의 통합 목표를 나타낸다.
+실제 OpenAI 키/모델 호출·전체 화면 통합 완료를 뜻하지 않는다. 개인 DB의 Supabase 복제는 없다.
 
 ## 3. 저장소별 책임
 
@@ -171,7 +172,9 @@ publish에는 출처 이용 조건 승인이 필요하다. rollback은 같은 so
 ## 7. 캐시·집계·장애 경계
 
 반복 요청 분석·공개 자료 cache-aside·Redis 도입 단계는 [반복 패턴 및 캐시 설계](A_반복패턴_및_캐시_설계.md)를 따른다.
-패턴 분석/캐시 provider/실제 Redis는 아직 미구현이며 config/cache_policy.json은 비활성 설계값이다.
+공개 카탈로그 cache provider와 로컬 카운트는 구현했고 실제 Redis 연결을 검증했다.
+config/cache_policy.json을 factory가 읽는다. FAQ·영속 패턴 분석·자동 전송은 예정이다.
+main의 SQLite 공식 source와 A source는 data_sources/catalog_data_sources로 분리해 기존 자료를 보존한다.
 현재 개인화 추천·원문·재고를 캐시하지 않고 공개 자료 조회만 대상으로 설계한다.
 
 - 제안 캐시 키: `catalog:{source}:{release_id}:{cache_version}:{kind}:{external_id}`. TTL 제안 24시간.

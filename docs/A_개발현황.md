@@ -9,7 +9,28 @@
 팀 origin과 기존 fork main은 변경하지 않는다. 새 브랜치의 시작 기준은 팀 main이다.
 main 병합 전 상태이며 실제 서비스 완료 선언이 아니다.
 
-## 추가 설계: 반복 요청 분석·캐시·Redis
+## 최신 후속: 실제 Redis 연결 및 main 통합
+
+공유할 새 브랜치: codex/redis-cache-integration. 팀 main f21be76을 merge했다.
+기존 A 기반과 미커밋 상태였던 사전 적재/무료 용량 설계를 안전 커밋으로 보존하고 통합했다.
+
+- 실제 로컬 Docker Redis 8.2-alpine image digest 고정, 127.0.0.1:6379, maxmemory 32MB, allkeys-lfu, RDB/AOF 비활성.
+- redis-py 8.2.0 adapter, memory/disabled provider, 승인 published 자료의 release/version cache-aside 구현.
+- 공개 food/recipe 상세 API와 로컬 인증 cache 상태 API, 프로세스 로컬 제한 카운트 구현.
+- 개인 추천·재고·건강 조건·원문·키는 cache 대상에서 제외. FAQ cache·영속 분석은 아직 없음.
+- 임시 SQLite 합성 자료에서 실제 Redis miss→hit 확인. 해당 Redis를 실제 stop한 뒤 DB fallback/unavailable 확인 후 복구.
+- 최신 main의 data_sources(id,source_key)와 A의 과거 data_sources(code) 충돌을 catalog_data_sources로 분리.
+  이전 A DB rename/FK 보존·main import 공존 시험 및 두 실제 로컬 DB integrity=ok/FK 위반 0 확인.
+- 초기 cache+platform+main import 시험 33개 통과.
+- **전체 pytest: 152 passed, 1 failed / 130.73초.** PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 사용.
+  실패는 이전과 같은 test_chatollama_receives_non_thinking_context_parameters의 xxhash DLL 로딩 정책 차단이다.
+- 이번 실제 Redis 검증은 합성 자료다. 공식 식품 수집/적재·실모델·실카메라·모바일 E2E 완료를 의미하지 않는다.
+- 로컬 .env에서 Redis를 선택했지만 .env.example은 memory다. Docker/Redis 없이도 앱이 동작한다.
+- main의 B 개인정보 게이트/OpenAI 코드가 통합됐으며 실제 키로 호출하지 않았다. 아래 과거 Ollama 상태 기록은 시작 시점 기준이다.
+
+실행: [Redis 실행 및 검증](A_Redis_실행_및_검증.md).
+
+## 이전 설계 기록: 반복 요청 분석·캐시·Redis
 
 [반복 패턴 및 캐시 설계](A_반복패턴_및_캐시_설계.md)와 config/cache_policy.json을 추가했다.
 공개 식품/레시피·승인 FAQ 조회만 release/version별 cache-aside로 보관하는 방향이다.

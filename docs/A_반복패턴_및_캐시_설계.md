@@ -1,8 +1,10 @@
 # A 반복 요청 분석 및 캐시·Redis 설계
 
 버전 v1 / 2026-11-25 / 담당 A.
-상태: **설계 추가, 캐시 서비스·패턴 수집·실제 Redis 연결은 아직 미구현**.
-설정 초안: config/cache_policy.json. enabled=false이며 이 파일만으로 캐시가 실행되지 않는다.
+상태: **공개 카탈로그 memory/Redis cache-aside 및 로컬 카운트 구현, 실제 Redis 연결 검증**.
+실행/검증 기준은 [Redis 실행 가이드](A_Redis_실행_및_검증.md)를 따른다.
+FAQ/RAG·개인화 cache·영속 패턴 분석·자동 cloud 전송은 미구현이다.
+설정: config/cache_policy.json. factory가 읽으며 변경 후 앱을 재시작한다.
 개인정보 로컬 보관과 공개 식품 DB 사전 구축 원칙은 그대로 유지한다.
 
 ## 1. 개념과 KINI 예시
@@ -151,12 +153,13 @@ Supabase에 별도 중복 cache 테이블을 만들지 않는다. 150MB 냉장�
 | 서버 접근 | 로컬/사설 연결·ACL, 공개 인터넷 노출 금지. 원격 서비스면 TLS 검토 |
 
 LFU 내부 빈도는 캐시 제거를 돕는 것이며 사용자 행동 분석/선호 학습 시스템을 대신하지 않는다.
-유료 Redis 계약·설치·서버 실행은 이번 설계에서 수행하지 않는다.
+유료 Redis 계약은 하지 않았다. 로컬 Docker Redis를 선택 실행하고 실제 연결·장애 fallback을 검증했다.
 재시작 후 비어 있는 캐시는 정상이며 원본 DB에서 다시 채운다.
 
 ## 9. 구현할 내부 인터페이스와 담당
 
-다음은 계획이며 현재 HTTP API로 제공되지 않는다.
+아래 개념은 MemoryCache/RedisCache/DisabledCache, PublicCatalog, PatternStats로 구현했다.
+공개 상세 HTTP 및 상태 조회는 실행 가이드를 따른다. FAQ 검색 provider 연결은 예정이다.
 
 ```text
 CacheProvider.get(public_key) -> cached_value | miss
@@ -169,15 +172,15 @@ PatternCounter.record(namespace, public_key, hit_or_miss, latency_bucket) -> loc
 A: provider/fake/TTL/크기 제한/키 생성·무효화·로컬 지표·장애 fallback.
 B: 승인된 공개 FAQ topic·검색 버전, 현재 개인 조건 검증, AI 오류 시 추천 중단 유지.
 C: 최신 재고/품질 상태 표시. cache hit를 '현재 식사에 안전함'으로 표시하지 않는다.
-실제 endpoint·추천 응답 형식을 임의로 추가/변경하지 않는다.
+공개 조회 endpoint를 A API에 추가했으며 기존 추천 응답·B/C 파일은 변경하지 않았다.
 
 구현 순서:
 
-1. 식품 데이터 사전 적재/검증·공개 조회 provider 연결.
-2. in-memory fake와 monotonic clock 기반 TTL·크기 제한·직렬화 검증.
-3. 반복 공개 조회 통계와 cache-aside 통합. 원본 호출 감소 측정.
-4. release 변경·오류·개인정보 경계·동시 miss 시험.
-5. 측정상 필요할 때 Redis adapter로 교체. 코드에서 Redis를 필수 의존성으로 만들지 않음.
+1. 공개 조회 provider와 memory/Redis adapter는 연결했다. 공식 식품 사전 적재는 키 설정 후 진행한다.
+2. monotonic clock 기반 memory TTL·크기 제한·직렬화 및 원본 fallback을 구현했다.
+3. 프로세스 로컬 공개 조회 카운트를 구현했다. 실제 서비스 트래픽의 효과 측정은 후속이다.
+4. release 변경·오류·개인 필드 오염·동시 miss 합치기를 시험했다.
+5. Redis client는 dependency에 포함하지만 실행 서버는 선택이다. 기본 memory와 disabled 모드를 지원한다.
 
 ## 10. 완료 기준과 검증 계획
 
@@ -189,7 +192,7 @@ C: 최신 재고/품질 상태 표시. cache hit를 '현재 식사에 안전함'
 - 최대 entries/value/memory를 넘으면 보관하지 않거나 제거하고 원본 요청은 처리한다.
 - 같은 key의 동시 miss는 조회가 폭증하지 않으며 실패 잠금이 영구적으로 남지 않는다.
 - 패턴 집계는 로컬 보관/후보 수 제한을 지키고 cloud에는 일별 hit/miss 합계만 남는다.
-- 현재 위 캐시 시험을 통과했다고 주장하지 않는다. 실제 provider 구현과 테스트는 다음 단계다.
+- 구현/실제 연결 시험 결과는 Redis 실행 가이드와 최신 개발 현황에 기록한다. 설계의 모든 후속 항목이 완료된 것은 아니다.
 
 ## 공식 참고
 

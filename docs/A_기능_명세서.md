@@ -37,9 +37,9 @@ P0는 통합 데모에 필요한 우선 작업, P1은 데이터 운영·품질 �
 | A-F10 | ThinQ 스타일 가상 기기 provider | P0 | 예정 | C 화면 계약 필요 |
 | A-F11 | 상태 조회 | P0 | 로컬 상태 구현, 기기 동기화 상태 예정 | A-API-01 |
 | A-F12 | 비식별 운영 지표 | P1 | schema/adapter 구현, 자동 집계·실서버 전송 예정 | operational_metrics.py |
-| A-F13 | release 기반 Redis 캐시 | P1 | 버전 구조 구현, cache provider/TTL 처리 예정 | active_data_releases |
+| A-F13 | release 기반 Redis 캐시 | P1 | 공개 상세·memory/Redis·TTL·장애 fallback 구현, 실제 연결 검증 | public_catalog.py, integrations/cache.py |
 | A-F14 | 암호화·백업·삭제·보존 | P0(실제 개인정보 전) | 예정 | 정책·권한·복구 시험 필요 |
-| A-F15 | 반복 공개 조회 분석·캐시 대상 선정 | P1 | 설계 추가, 수집/분석기 예정 | 로컬 제한 집계, cloud는 hit/miss 일별 합계 |
+| A-F15 | 반복 공개 조회 분석·캐시 대상 선정 | P1 | 프로세스 로컬 카운트 구현, 영속 분석·자동 전송 예정 | PatternStats, raw query/key 비노출 |
 
 캐시 상세: [반복 패턴 및 캐시 설계](A_반복패턴_및_캐시_설계.md).
 Redis 도입과 사용자 선호 학습을 구분하고, 개인화 추천/재고·원문은 초기 캐시 대상에서 제외한다.
