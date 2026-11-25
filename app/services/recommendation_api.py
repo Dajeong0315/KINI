@@ -32,6 +32,33 @@ def errors(fn):
 def privacy_capabilities():
     return jsonify({'delete_available':False,'export_available':False,'reason':'인증, 권한 및 암호화 정책이 필요합니다.'})
 
+@api.get('/api/data-releases')
+def data_releases():
+    with open_db() as db:
+        pointer=dict(db.execute('SELECT * FROM data_release_pointers WHERE id=1').fetchone())
+        rows=[dict(row) for row in db.execute('''SELECT r.id,r.external_release_id,r.source_published_at,r.imported_at,r.checksum,r.status,r.record_count,r.accepted_count,r.quarantined_count,s.source_key,s.provider_name,s.dataset_name
+            FROM dataset_releases r JOIN data_sources s ON s.id=r.data_source_id ORDER BY r.id DESC''')]
+        for row in rows: row['is_current_published']=row['id']==pointer['nutrition_release_id']
+        allergens=[dict(row) for row in db.execute('SELECT id,source_name,source_url,legal_or_reference_version,effective_date,imported_at,checksum,status FROM allergen_reference_versions ORDER BY id DESC')]
+        for row in allergens: row['is_current_published']=row['id']==pointer['allergen_reference_version_id']
+        return jsonify({'nutrition_releases':rows,'allergen_reference_versions':allergens,'current':pointer})
+
+@api.get('/api/data-releases/<int:release_id>')
+def data_release(release_id):
+    with open_db() as db:
+        row=db.execute('''SELECT r.id,r.external_release_id,r.source_published_at,r.imported_at,r.checksum,r.status,r.record_count,r.accepted_count,r.quarantined_count,r.notes,s.source_key,s.provider_name,s.dataset_name,s.source_url
+            FROM dataset_releases r JOIN data_sources s ON s.id=r.data_source_id WHERE r.id=?''',(release_id,)).fetchone()
+        if not row: return jsonify({'error':'release를 찾을 수 없습니다.'}),404
+        pointer=db.execute('SELECT nutrition_release_id FROM data_release_pointers WHERE id=1').fetchone()
+        value=dict(row); value['is_current_published']=value['id']==pointer['nutrition_release_id']
+        return jsonify(value)
+
+@api.get('/api/data-quality/summary')
+def data_quality_summary():
+    with open_db() as db:
+        pointer=dict(db.execute('SELECT * FROM data_release_pointers WHERE id=1').fetchone())
+        return jsonify({'current':pointer,'ingredients_by_source':[dict(r) for r in db.execute('SELECT source_type,COUNT(*) count FROM ingredients GROUP BY source_type')], 'official_food_items':db.execute('SELECT COUNT(*) FROM official_food_items').fetchone()[0], 'active_mappings':db.execute('SELECT COUNT(*) FROM ingredient_official_food_mappings WHERE active=1').fetchone()[0], 'note':'Product allergens and cross-contact are not inferred from nutrition imports.'})
+
 @api.post('/api/inventory/normalize')
 @errors
 def inventory_normalize():
@@ -174,13 +201,17 @@ def create_recommendation():
 @api.get('/api/recommendations/<int:request_id>')
 def get_recommendation(request_id):
     with open_db() as db:
-        row=db.execute('SELECT result_json FROM recommendation_requests WHERE id=?',(request_id,)).fetchone()
+        row=db.execute('SELECT result_json,nutrition_data_release_id,allergen_reference_version_id FROM recommendation_requests WHERE id=?',(request_id,)).fetchone()
+        pointer=db.execute('SELECT nutrition_release_id,allergen_reference_version_id FROM data_release_pointers WHERE id=1').fetchone()
     if not row: return jsonify({'error':'추천 요청을 찾을 수 없습니다.'}),404
     result=json.loads(row[0])
     if 'data_quality' not in result:
         result.update({'status':'stale_unvalidated','data_quality':'confirmation_required','requires_confirmation':True,'warnings':['이전 규칙으로 저장된 결과입니다. 현재 정보로 다시 추천받으세요.']})
         for candidate in result.get('recommendations',[]):
             candidate.update({'data_quality':'confirmation_required','requires_confirmation':True,'warnings':['현재 기준으로 재검증되지 않았습니다.']})
+    elif row['nutrition_data_release_id'] != pointer['nutrition_release_id'] or row['allergen_reference_version_id'] != pointer['allergen_reference_version_id']:
+        result.update({'status':'stale_unvalidated','requires_confirmation':True})
+        result.setdefault('warnings',[]).append('Published reference release changed; rerun the recommendation to revalidate.')
     result['explanation']=explain_recommendation(result)
     return jsonify(result)
 
