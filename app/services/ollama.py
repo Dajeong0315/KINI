@@ -11,11 +11,11 @@ from .errors import ServiceError
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "system.md"
-DEFAULT_MODEL = "qwen2.5:3b-instruct-q4_K_M"
+DEFAULT_MODEL = "qwen3.5:4b-q4_K_M"
 
 
 def configured_model() -> str:
-    return os.getenv("OLLAMA_MODEL") or DEFAULT_MODEL
+    return (os.getenv("OLLAMA_MODEL") or "").strip() or DEFAULT_MODEL
 
 
 def ask_ollama(
@@ -29,7 +29,7 @@ def ask_ollama(
         raise ServiceError("시스템 프롬프트 파일을 찾을 수 없습니다.") from exc
 
     model = configured_model()
-    if model.startswith("qwen3"):
+    if model.split(":", 1)[0] == "qwen3":
         # 구형 Ollama에서도 Qwen3의 장문 사고 출력을 피하기 위한 모델 고유 제어 토큰.
         system_prompt = "/no_think\n" + system_prompt
     system_prompt += (
@@ -48,13 +48,13 @@ def ask_ollama(
     payload: dict[str, Any] = {
         "model": model,
         "stream": False,
-        # Qwen3의 사고 토큰 대신 발표용 짧은 최종 답변만 받는다.
+        # Qwen3.5에서도 API의 사고 제어를 사용해 최종 답변만 받는다.
         "think": False,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
-        "options": {"temperature": 0.1, "num_predict": 120, "seed": 7},
+        "options": {"temperature": 0.1, "num_predict": 120, "num_ctx": 4096, "seed": 7},
     }
     if decision_facts is not None:
         payload["format"] = {
