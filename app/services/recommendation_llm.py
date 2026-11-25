@@ -3,15 +3,16 @@ import json, os
 from urllib.parse import urlparse
 from pathlib import Path
 from .recommendation_models import RecommendationRequest
+from .ollama import configured_model
 
-PROMPT_VERSION='recommendation-1'
+PROMPT_VERSION='recommendation-2'
 PROMPT_DIR=Path(__file__).resolve().parents[1] / 'prompts'
 
 def _local_settings():
     base_url=os.getenv('OLLAMA_BASE_URL','http://localhost:11434')
     if urlparse(base_url).hostname not in ('localhost','127.0.0.1','::1'):
         raise ValueError('개인화 요청은 로컬 Ollama만 사용할 수 있습니다.')
-    return {'model':os.getenv('OLLAMA_MODEL','qwen2.5:3b-instruct-q4_K_M'),'base_url':base_url,'temperature':0,'num_predict':160,'seed':7,'client_kwargs':{'timeout':5.0}}
+    return {'model':configured_model(),'base_url':base_url,'temperature':0,'num_predict':160,'num_ctx':4096,'reasoning':False,'seed':7,'client_kwargs':{'timeout':90.0}}
 
 def extract_preference_signal(text, ingredient_names):
     """Accept only short, exact food-preference statements; no raw text leaves the process."""
