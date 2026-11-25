@@ -1,5 +1,6 @@
 """Validated cooking drafts; all ingredient quantities are recipe-total grams."""
 import json
+from collections import defaultdict
 from datetime import date, datetime
 from .freshness import assess_inventory
 from .recommendation_repository import members
@@ -88,18 +89,55 @@ def change(db, session_id, obj):
     return state(db,session_id)
 
 
-def complete(db, session_id, obj):
-    datetime.fromisoformat(obj.eaten_at.replace('Z','+00:00'))
-    # Serialize stock checks and session completion across concurrent requests.
-    db.execute('BEGIN IMMEDIATE')
-    session=state(db,session_id)
-    if session['status']!='active': raise ValueError('이미 완료된 조리 세션입니다.')
-    participants={r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=?',(session['meal_session_id'],))}
-    if len({x.member_id for x in obj.items})!=len(obj.items) or not all(x.member_id in participants for x in obj.items): raise ValueError('식사 참여자를 중복 없이 선택해 주세요.')
-    for item in obj.items:
-        person=members(db,session['household_id'],[item.member_id])[0]
-        for constraint in person['constraints']:
-            if constraint['kind']=='meal_sodium_max_mg' and session['nutrition_per_serving']['sodium_mg']*item.servings>float(constraint['value']): raise ValueError('개인 섭취량이 나트륨 제한을 초과합니다.')
+class InventoryConfirmationRequired(ValueError):
+    def __init__(self, message, ingredients):
+        super().__init__(message)
+        self.ingredients = ingredients
+
+
+def _link_confirmed_outflows(db, session, event_ids):
+    ingredients = session['ingredients']
+    if not event_ids or len(set(event_ids)) != len(event_ids):
+        raise InventoryConfirmationRequired('확정된 출고 이벤트를 각각 한 번씩 선택하세요.', ingredients)
+
+    placeholders = ','.join('?' for _ in event_ids)
+    rows = db.execute(f"""
+        SELECT e.id, c.ingredient_id, c.quantity_g
+        FROM inventory_events e
+        JOIN inventory_event_changes c ON c.event_id=e.id
+        WHERE e.household_id=? AND e.status='applied' AND e.action='stock_out'
+          AND e.id IN ({placeholders})
+        """, (session['household_id'], *event_ids)).fetchall()
+    if len(rows) != len(event_ids):
+        raise InventoryConfirmationRequired('같은 가구의 확정 출고 내역을 확인하세요.', ingredients)
+
+    withdrawn = defaultdict(float)
+    for row in rows:
+        withdrawn[row['ingredient_id']] += row['quantity_g']
+    required = {item['ingredient_id']: item['quantity_g'] for item in ingredients}
+    if withdrawn.keys() != required.keys() or any(
+        withdrawn[ingredient_id] + 1e-9 < quantity_g for ingredient_id, quantity_g in required.items()
+    ):
+        raise InventoryConfirmationRequired('조리에 사용한 재료와 출고 중량을 확인하세요.', ingredients)
+
+    # Only B owns these links. Claims and the meal record commit in the same transaction.
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS cooking_inventory_event_links (
+            event_id INTEGER PRIMARY KEY REFERENCES inventory_events(id),
+            cooking_session_id INTEGER NOT NULL REFERENCES cooking_sessions(id)
+        )
+    """)
+    if db.execute(
+        f'SELECT 1 FROM cooking_inventory_event_links WHERE event_id IN ({placeholders})', event_ids
+    ).fetchone():
+        raise InventoryConfirmationRequired('이미 조리 기록에 연결된 출고 이벤트가 있습니다.', ingredients)
+    db.executemany(
+        'INSERT INTO cooking_inventory_event_links (event_id,cooking_session_id) VALUES (?,?)',
+        [(event_id, session['id']) for event_id in event_ids],
+    )
+
+
+def _deduct_cooking_inventory(db, session):
     for ingredient in session['ingredients']:
         remaining=ingredient['quantity_g']
         rows=db.execute('''SELECT * FROM inventory_items WHERE household_id=? AND ingredient_id=?
@@ -116,6 +154,35 @@ def complete(db, session_id, obj):
             remaining-=used
             if remaining <= 1e-9: break
         if remaining > 1e-9: raise ValueError('확인된 재고가 부족합니다.')
+
+
+def complete(db, session_id, obj, *, inventory_token=None):
+    datetime.fromisoformat(obj.eaten_at.replace('Z','+00:00'))
+    # Serialize stock checks and session completion across concurrent requests.
+    db.execute('BEGIN IMMEDIATE')
+    if inventory_token is not None:
+        from .local_identity import authorize
+
+        identity = authorize(db, inventory_token, write=True)
+        if not db.execute(
+            'SELECT 1 FROM cooking_sessions WHERE id=? AND household_id=?',
+            (session_id, identity['household_id']),
+        ).fetchone():
+            raise PermissionError('조리 세션의 가구 권한을 확인하세요.')
+    session=state(db,session_id)
+    if session['status']!='active': raise ValueError('이미 완료된 조리 세션입니다.')
+    participants={r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=?',(session['meal_session_id'],))}
+    if len({x.member_id for x in obj.items})!=len(obj.items) or not all(x.member_id in participants for x in obj.items): raise ValueError('식사 참여자를 중복 없이 선택해 주세요.')
+    for item in obj.items:
+        person=members(db,session['household_id'],[item.member_id])[0]
+        for constraint in person['constraints']:
+            if constraint['kind']=='meal_sodium_max_mg' and session['nutrition_per_serving']['sodium_mg']*item.servings>float(constraint['value']): raise ValueError('개인 섭취량이 나트륨 제한을 초과합니다.')
+    if inventory_token is not None:
+        _link_confirmed_outflows(db, session, obj.inventory_event_ids)
+    elif obj.inventory_event_ids:
+        raise InventoryConfirmationRequired('출고 이벤트를 사용할 수 없는 서버입니다.', session['ingredients'])
+    else:
+        _deduct_cooking_inventory(db, session)
     cur=db.execute('INSERT INTO meal_records(session_id,recipe_id,eaten_at) VALUES (?,?,?)',(session['meal_session_id'],session['recipe_id'],obj.eaten_at))
     for item in obj.items:
         rec=db.execute('INSERT INTO meal_record_items(record_id,member_id,servings) VALUES (?,?,?)',(cur.lastrowid,item.member_id,item.servings))
