@@ -170,6 +170,10 @@ def file_too_large(_error):
     return jsonify({"error": "음성 파일은 25MB 이하여야 합니다."}), 413
 
 
+from app.services.recommendation_api import api as recommendation_api
+app.register_blueprint(recommendation_api)
+
+
 if __name__ == "__main__":
     debug = os.getenv("FLASK_DEBUG") == "1"
     host = os.getenv("APP_HOST", "0.0.0.0")

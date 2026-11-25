@@ -8,6 +8,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+app/data/*.sqlite3
+app/data/*.sqlite3-*
 
 # Generated audio and local test audio
 output/audio/*

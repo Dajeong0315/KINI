@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1080" viewBox="0 0 1600 1080" role="img" aria-labelledby="title desc">
+  <title id="title">KINI 온디바이스 AI 엔진: 한 번의 식사 추천이 만들어지는 과정</title>
+  <desc id="desc">사용자 요청부터 음성 응답까지의 6단계 추천 흐름, 조건부 RAG 경로, 개인화 메모리 루프 및 개발 로드맵을 보여주는 팀 공유용 다이어그램</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000" flood-opacity=".24"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10Z" fill="#9aa8bd"/></marker>
+    <marker id="purpleArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10Z" fill="#ad72ff"/></marker>
+    <style>
+      .base { font-family: 'Pretendard','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif; }
+      .title { font-size: 34px; font-weight: 800; fill: #f8fafc; letter-spacing: -.8px; }
+      .subtitle { font-size: 17px; fill: #94a3b8; }
+      .card { fill: #171c26; stroke: #364152; stroke-width: 1.5; }
+      .num { font-size: 13px; font-weight: 800; fill: #fff; }
+      .cardTitle { font-size: 19px; font-weight: 750; fill: #f8fafc; letter-spacing: -.25px; }
+      .body { font-size: 15px; fill: #b8c3d6; }
+      .small { font-size: 13px; fill: #9aa8bd; }
+      .mono { font-family: Consolas, monospace; font-size: 12px; fill: #86b7ff; }
+      .step { stroke: #9aa8bd; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .sectionTitle { font-size: 15px; font-weight: 800; fill: #e6edf7; letter-spacing: .3px; }
+      .footerTitle { font-size: 15px; font-weight: 800; fill: #e2e8f0; }
+      .footerBody { font-size: 14px; fill: #9eacbf; }
+    </style>
+  </defs>
+  <rect width="1600" height="1080" fill="#0f1218"/>
+  <g class="base">
+    <text x="70" y="76" class="title">KINI 온디바이스 AI 엔진 <tspan fill="#fbbf24">|</tspan> 한 번의 식사 추천이 만들어지는 과정</text>
+    <text x="70" y="108" class="subtitle">AI는 이해하고 설명합니다. 안전 · 영양 · 신선도는 로컬 규칙과 데이터가 확정합니다.</text>
+    <g transform="translate(1126 72)">
+      <rect width="12" height="12" rx="2" fill="#22c55e"/><text x="19" y="11" class="small">완료</text>
+      <rect x="86" width="12" height="12" rx="2" fill="#0ea5e9"/><text x="105" y="11" class="small">현재 동작</text>
+      <rect x="197" width="12" height="12" rx="2" fill="#fb923c"/><text x="216" y="11" class="small">다음 단계</text>
+      <rect x="309" width="12" height="12" rx="2" fill="#a855f7"/><text x="328" y="11" class="small">개인화 루프</text>
+    </g>
+
+    <!-- Main flow arrows -->
+    <path d="M290 278 H323" class="step"/><text x="292" y="259" class="small">음성 / 텍스트</text>
+    <path d="M555 278 H588" class="step"/><text x="557" y="259" class="small">요청 JSON</text>
+    <path d="M820 278 H853" class="step"/><text x="821" y="259" class="small">검증 결과</text>
+    <path d="M1085 278 H1118" class="step"/><text x="1088" y="259" class="small">추천 결과</text>
+    <path d="M1350 278 H1383" class="step"/><text x="1350" y="259" class="small">말로 설명</text>
+
+    <!-- 1 -->
+    <g filter="url(#shadow)"><rect x="70" y="180" width="220" height="196" rx="10" class="card" stroke="#4b5563"/>
+      <rect x="88" y="199" width="28" height="28" rx="14" fill="#16a34a"/><text x="98" y="218" class="num">1</text>
+      <text x="126" y="220" class="cardTitle">사용자 요청</text><path d="M88 244 H272" stroke="#354052"/>
+      <text x="88" y="275" class="body">“아이 할머니와 20분 안에 저녁”</text>
+      <rect x="88" y="304" width="125" height="28" rx="4" fill="#103a25"/><text x="99" y="323" font-size="12" font-weight="800" fill="#86efac">STT · 현재 완료</text>
+      <text x="88" y="354" class="mono">voice / text</text></g>
+
+    <!-- 2 -->
+    <g filter="url(#shadow)"><rect x="323" y="180" width="232" height="196" rx="10" class="card" stroke="#1688d4"/>
+      <rect x="341" y="199" width="28" height="28" rx="14" fill="#0284c7"/><text x="351" y="218" class="num">2</text>
+      <text x="379" y="220" class="cardTitle">의도 해석 LLM</text><path d="M341 244 H537" stroke="#354052"/>
+      <text x="341" y="275" class="body">자연어를 제한된 추천 요청으로 변환</text>
+      <text x="341" y="310" class="mono">participants[] · time · purpose</text>
+      <text x="341" y="335" class="mono">temperature 0</text></g>
+
+    <!-- 3 -->
+    <g filter="url(#shadow)"><rect x="588" y="180" width="232" height="196" rx="10" class="card" stroke="#4b5563"/>
+      <rect x="606" y="199" width="28" height="28" rx="14" fill="#475569"/><text x="616" y="218" class="num">3</text>
+      <text x="644" y="220" class="cardTitle">로컬 사실 조회</text><path d="M606 244 H802" stroke="#354052"/>
+      <text x="606" y="275" class="body">SQLite에서 참여자 · 재료 · 제약 확인</text>
+      <text x="606" y="307" class="small">가족 프로필 · 알레르기</text><text x="606" y="330" class="small">재고 · 기한 · 신선도 · 오늘 섭취</text>
+      <text x="606" y="354" class="small" fill="#fda4af">참여하지 않은 가족은 제외</text></g>
+
+    <!-- 4 -->
+    <g filter="url(#shadow)"><rect x="853" y="180" width="232" height="196" rx="10" class="card" stroke="#1688d4"/>
+      <rect x="871" y="199" width="28" height="28" rx="14" fill="#0284c7"/><text x="881" y="218" class="num">4</text>
+      <text x="909" y="220" class="cardTitle">추천 규칙 엔진</text><path d="M871 244 H1067" stroke="#354052"/>
+      <text x="871" y="275" class="body">LLM이 아닌 Python이 확정</text>
+      <text x="871" y="307" class="small">1. 알레르기 · 안전 제외</text><text x="871" y="330" class="small">2. 영양 · 신선도 · 기한 반영</text>
+      <text x="871" y="353" class="small">3. 재고 · 조리 시간 · 선호 점수</text></g>
+
+    <!-- 5 -->
+    <g filter="url(#shadow)"><rect x="1118" y="180" width="232" height="196" rx="10" class="card" stroke="#1688d4"/>
+      <rect x="1136" y="199" width="28" height="28" rx="14" fill="#0284c7"/><text x="1146" y="218" class="num">5</text>
+      <text x="1174" y="220" class="cardTitle">답변 생성 LLM</text><path d="M1136 244 H1332" stroke="#354052"/>
+      <text x="1136" y="275" class="body">검증된 결과만 자연스러운 말로 설명</text>
+      <text x="1136" y="310" class="small">선택 이유 · 조리 순서</text><text x="1136" y="333" class="small">주의사항 · 대체 제안</text></g>
+
+    <!-- 6 -->
+    <g filter="url(#shadow)"><rect x="1383" y="180" width="147" height="196" rx="10" class="card" stroke="#4b5563"/>
+      <rect x="1401" y="199" width="28" height="28" rx="14" fill="#475569"/><text x="1411" y="218" class="num">6</text>
+      <text x="1437" y="220" class="cardTitle">음성 응답</text><path d="M1401 244 H1512" stroke="#354052"/>
+      <text x="1401" y="275" class="body">TTS</text><text x="1401" y="304" class="small">추천 3개</text><text x="1401" y="326" class="small">근거 · 확인 항목</text></g>
+
+    <!-- RAG -->
+    <g filter="url(#shadow)"><rect x="70" y="476" width="392" height="196" rx="10" fill="#201915" stroke="#f97316" stroke-width="2" stroke-dasharray="7 6"/>
+      <rect x="92" y="499" width="33" height="28" rx="5" fill="#9a3412"/><text x="101" y="518" class="num">RAG</text>
+      <text x="138" y="519" class="cardTitle">조건부 지식 경로</text><path d="M92 544 H440" stroke="#65391f"/>
+      <text x="92" y="576" class="body">조리 중 “국물이 짜요?” 같은 질문일 때만 호출</text>
+      <text x="92" y="607" class="small">조리 팁 · 손질 · 단위 · 저염 조리 · 대체 재료</text>
+      <text x="92" y="636" class="small">추천 순위·알레르기 판정에는 사용하지 않음</text></g>
+    <path d="M438 476 V410 H704 V376" fill="none" stroke="#fb923c" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrow)"/>
+    <text x="470" y="430" class="small" fill="#fdba74">필요할 때만 보강</text>
+
+    <!-- Memory -->
+    <g filter="url(#shadow)"><rect x="745" y="476" width="430" height="196" rx="10" fill="#1c1628" stroke="#a855f7" stroke-width="2"/>
+      <rect x="767" y="499" width="28" height="28" rx="14" fill="#7e22ce"/><text x="777" y="518" class="num">↻</text>
+      <text x="806" y="519" class="cardTitle">개인화 메모리</text><path d="M767 544 H1153" stroke="#4c2c68"/>
+      <text x="767" y="576" class="body">선택·거절·조리 실패 기록을 근거로</text>
+      <text x="767" y="607" class="body">선호 가중치만 갱신 — 프로필은 수정 안 함</text>
+      <text x="767" y="641" class="small" fill="#d8b4fe">예: 아이의 매운맛 거절 → 다음 추천에서 감점</text></g>
+    <path d="M1457 376 V432 H1175" fill="none" stroke="#9aa8bd" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M745 574 H620 V702 H180 V376" fill="none" stroke="#ad72ff" stroke-width="2" stroke-dasharray="7 6" marker-end="url(#purpleArrow)"/>
+    <text x="470" y="727" class="small" fill="#d8b4fe">사용자 반응이 다음 추천에 반영</text>
+
+    <!-- Footer -->
+    <rect x="70" y="796" width="1460" height="1" fill="#2d3748"/>
+    <text x="70" y="842" class="sectionTitle">개발 현황 및 다음 단계</text>
+    <g transform="translate(70 870)">
+      <rect width="340" height="136" rx="8" fill="#17221c"/><rect width="7" height="136" rx="3" fill="#22c55e"/>
+      <text x="24" y="35" class="footerTitle">완료</text><text x="24" y="65" class="footerBody">온디바이스 STT/TTS · Ollama · SQLite</text><text x="24" y="91" class="footerBody">가족 · 기본 추천 · 테스트</text>
+    </g>
+    <g transform="translate(440 870)">
+      <rect width="340" height="136" rx="8" fill="#15212a"/><rect width="7" height="136" rx="3" fill="#0ea5e9"/>
+      <text x="24" y="35" class="footerTitle">현재 동작</text><text x="24" y="65" class="footerBody">요청 해석/설명 체인 · 참여자별 필터·점수화</text><text x="24" y="91" class="footerBody">사용자 행동 기반 개인화</text>
+    </g>
+    <g transform="translate(810 870)">
+      <rect width="340" height="136" rx="8" fill="#2a1d15"/><rect width="7" height="136" rx="3" fill="#fb923c"/>
+      <text x="24" y="35" class="footerTitle">다음</text><text x="24" y="65" class="footerBody">조리 세션 · RAG 문서 · 실제 재료/영양 DB</text><text x="24" y="91" class="footerBody">개인화 가중치 고도화</text>
+    </g>
+    <g transform="translate(1180 870)">
+      <rect width="350" height="136" rx="8" fill="#21162b"/><rect width="7" height="136" rx="3" fill="#a855f7"/>
+      <text x="24" y="35" class="footerTitle">튜닝</text><text x="24" y="65" class="footerBody">프롬프트 · 모델 · RAG 검색 · 캐시</text><text x="24" y="91" class="footerBody">평가셋 · 랭킹 가중치</text>
+    </g>
+  </g>
+</svg>
