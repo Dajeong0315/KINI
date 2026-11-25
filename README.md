@@ -29,6 +29,8 @@ Invoke-RestMethod http://localhost:11434/api/tags
 
 Qwen3.5는 `think: false`로 호출하며 이전 Qwen3 전용 `/no_think` 문자열을 붙이지 않습니다. 컨텍스트는 4096 토큰으로 제한합니다. 자세한 준비·검증·이전 모델 전환 방법은 [Qwen3.5 실행 가이드](docs/Qwen3_5_4B_실행가이드.md)를 확인하세요.
 
+채팅과 가족 추천 체인은 같은 `OLLAMA_MODEL`을 사용합니다. 로컬 Ollama에 모델을 준비하고, 기존 `.env`에서 다른 모델을 지정했다면 원하는 모델명으로 직접 변경하세요. 추천 체인의 호출 제한시간은 90초이며 모델 출력은 추천 규칙이나 안전 필터를 대체하지 않습니다.
+
 기본 음성 경로는 `models/stt/small`의 faster-whisper 모델과 `models/tts/ko_KR-kss-medium.onnx`의 Piper 음성을 사용합니다. `FOODSAFETY_KOREA_API_KEY`는 COOKRCP01 레시피 검색, `DATA_GO_KR_SERVICE_KEY`는 식품영양성분 조회에만 사용합니다. ElevenLabs 모듈은 호환성을 위해 보존하지만 기본 실행 경로에서는 사용하지 않습니다.
 
 자세한 Windows 모델 준비·오프라인 실행·문제 해결은 [로컬 음성 모델 준비 문서](docs/로컬_음성_모델_준비.md), 실제 업로드 검증은 [음성 통합 테스트셋](docs/음성_통합_테스트셋.md)을 확인하세요.

@@ -26,6 +26,7 @@ def main() -> int:
         'OLLAMA_BASE_URL': 'http://127.0.0.1:11434', 'LOCAL_ONLY': '1',
         'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1', 'PYTHONUTF8': '1',
     })
+    os.environ.setdefault('APP_HOST', '127.0.0.1')
     model = (os.getenv('OLLAMA_MODEL') or '').strip() or 'qwen3.5:4b-q4_K_M'
     session = requests.Session()
     session.trust_env = False
