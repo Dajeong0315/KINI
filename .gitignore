@@ -10,6 +10,12 @@ __pycache__/
 .pytest_cache/
 app/data/*.sqlite3
 app/data/*.sqlite3-*
+*.db
+*.sqlite
+*.sqlite3
+data/raw/
+data/import-logs/
+*.log
 
 # Generated audio and local test audio
 output/audio/*

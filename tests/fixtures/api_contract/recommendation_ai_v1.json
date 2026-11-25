@@ -1,0 +1,8 @@
+{
+  "status": "recommendations_available",
+  "data_quality": "demo_data",
+  "warnings": [],
+  "requires_confirmation": true,
+  "recommendations": [{"recipe_id": 2, "name": "두부볶음"}],
+  "ai_explanation": {"source": "local_template", "summary": "로컬 안전 규칙으로 검증된 후보를 안내합니다.", "candidate_explanations": [{"recipe_id": 2, "reason": "로컬 규칙 엔진이 검증한 후보입니다."}]}
+}

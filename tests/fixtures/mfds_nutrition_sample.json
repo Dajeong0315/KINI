@@ -1,0 +1,7 @@
+{
+  "metadata": {"external_release_id": "sample-2026-01", "source_published_at": "2026-01-01"},
+  "records": [
+    {"food_code": "MFDS-001", "food_name": "테스트 현미", "food_category": "곡류", "basis_amount_g": 100, "nutrients": {"energy_kcal": 350, "carbohydrate_g": 73, "protein_g": 7, "fat_g": 3, "sodium_mg": 5}},
+    {"food_code": "MFDS-002", "food_name": "테스트 두부", "food_category": "두류", "basis_amount_g": 100, "nutrients": {"energy_kcal": 80, "carbohydrate_g": 2, "protein_g": 8, "fat_g": 5, "sodium_mg": 10}}
+  ]
+}

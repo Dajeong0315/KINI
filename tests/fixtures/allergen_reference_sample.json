@@ -1,0 +1,10 @@
+{
+  "source_name": "식품 등의 표시기준 검토 fixture",
+  "source_url": "https://www.mfds.go.kr/",
+  "legal_or_reference_version": "reviewed-sample-2026-01",
+  "effective_date": "2026-01-01",
+  "items": [
+    {"allergen_code": "CRUSTACEAN", "display_name_ko": "갑각류", "aliases": ["새우", "게"]},
+    {"allergen_code": "NUT", "display_name_ko": "견과류", "aliases": ["땅콩"]}
+  ]
+}

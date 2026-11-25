@@ -8,6 +8,24 @@ def inspect_ingredient(db, ingredient_id, people, inventory):
     codes=[]; warnings=[]
     if not item or not item['active']:
         return ['ingredient_unknown'], ['재료 정보 확인이 필요합니다.'], None
+    # Official values are eligible only through an explicit approved mapping and
+    # only when that food belongs to the current published release.  Names are
+    # never used as an implicit join.
+    pointer=db.execute('SELECT nutrition_release_id FROM data_release_pointers WHERE id=1').fetchone()
+    official=None
+    if pointer and pointer['nutrition_release_id']:
+        official=db.execute('''SELECT f.basis_amount_g,
+            MAX(CASE WHEN v.nutrient_code='energy_kcal' THEN v.amount END) energy_kcal,
+            MAX(CASE WHEN v.nutrient_code='protein_g' THEN v.amount END) protein_g,
+            MAX(CASE WHEN v.nutrient_code='carbohydrate_g' THEN v.amount END) carbohydrate_g,
+            MAX(CASE WHEN v.nutrient_code='fat_g' THEN v.amount END) fat_g,
+            MAX(CASE WHEN v.nutrient_code='sodium_mg' THEN v.amount END) sodium_mg
+            FROM ingredient_official_food_mappings m JOIN official_food_items f ON f.id=m.official_food_item_id
+            LEFT JOIN official_nutrient_values v ON v.official_food_item_id=f.id
+            WHERE m.ingredient_id=? AND m.active=1 AND f.release_id=?
+            GROUP BY f.id ORDER BY m.approved_at DESC LIMIT 1''',(ingredient_id,pointer['nutrition_release_id'])).fetchone()
+    if official:
+        item=dict(item); item.update(dict(official)); item['nutrition_source']='official_imported'; item['nutrition_confidence']=1.0
     basis=item['basis_amount_g']
     if not basis or not math.isfinite(basis) or basis<=0 or any(item[n] is None or not math.isfinite(item[n]) or item[n]<0 for n in NUTRIENTS): codes.append('nutrition_unknown')
     allergies={a for p in people for a in p['allergies']}

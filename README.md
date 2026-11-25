@@ -128,3 +128,18 @@ curl -X POST http://127.0.0.1:5000/api/recommendations \
 `POST /api/inventory/normalize` 요청 예: `{"name":"당근 1개","quantity":1,"unit":"개"}`. 응답은 정규 재료와 변환 결과를 포함하며, 실제 무게의 근거가 없으면 `conversion.status`가 `needs_confirmation`, `quantity_g`가 null입니다. 예를 들어 사용자가 실제 중량을 확인하면 `{"household_id":1,"ingredient_id":3,"name":"당근","quantity":200,"unit":"g"}`을 `POST /api/inventory/items`에 보내 저장할 수 있습니다. `GET /api/ingredients/search?q=당근`은 정규 재료를 조회합니다. ml/L은 부피로만 변환하고 밀도 없이 g으로 바꾸지 않습니다. 사용자 제품명이나 복합 재료는 라벨 확인 대상으로 남습니다.
 
 추천 및 조리 응답의 `data_quality`는 `verified`, `partially_verified`, `confirmation_required`, `demo_data`로 구분합니다. 현재 엔진은 교차접촉 확인 안내를 항상 표시하므로 실제 안전 보증 의미의 `verified`는 반환하지 않습니다. `demo_data`도 `requires_confirmation: true`이며 실제 음식·영양 판단에 사용할 수 없습니다. `data_status=verified`인 재고는 입력 이름과 중량이 정규화됐다는 뜻일 뿐 제품 안전이나 라벨 검증을 뜻하지 않습니다. 알레르기 충돌·라벨 미확인·영양 누락 등은 `excluded_candidates[].reason_codes`에 표시하고, 후보가 없으면 `status: no_safe_recommendation`입니다. 자세한 출처 정책은 [데이터 안전 설계](docs/데이터_안전_정규화_설계.md)를 참고하세요.
+## Official food-data import MVP
+
+Recommendation requests never query external sources; they read only the explicitly published local SQLite release. Set only the variable name `DATA_GO_KR_SERVICE_KEY` in local configuration; do not commit a key, raw payload, or SQLite database.
+
+```powershell
+python scripts/import_mfds_nutrition.py --input tests/fixtures/mfds_nutrition_sample.json --dry-run
+python scripts/import_mfds_nutrition.py --input tests/fixtures/mfds_nutrition_sample.json --validate
+python scripts/import_mfds_nutrition.py --input tests/fixtures/mfds_nutrition_sample.json --publish --confirm-publish
+python scripts/import_mfds_nutrition.py --from-api --dry-run
+python scripts/import_allergen_reference.py --input tests/fixtures/allergen_reference_sample.json --publish --confirm-publish
+```
+
+`--from-api` reads `DATA_GO_KR_SERVICE_KEY` only when explicitly invoked. Tests use fixtures, never a real API key. `GET /api/data-releases`, `GET /api/data-releases/<id>`, and `GET /api/data-quality/summary` expose release metadata only, never raw payloads or raw-file paths.
+
+Official nutrition applies only through an approved ingredient mapping. Nutrition imports do not infer product allergens, cross-contact, or label safety. Production still requires authentication, authorization, encryption, auditing, and recovery controls. See [the import design](docs/공식_식품데이터_import_설계.md).
