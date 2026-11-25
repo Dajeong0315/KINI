@@ -9,6 +9,27 @@
 팀 origin과 기존 fork main은 변경하지 않는다. 새 브랜치의 시작 기준은 팀 main이다.
 main 병합 전 상태이며 실제 서비스 완료 선언이 아니다.
 
+## 추가 설계: 반복 요청 분석·캐시·Redis
+
+[반복 패턴 및 캐시 설계](A_반복패턴_및_캐시_설계.md)와 config/cache_policy.json을 추가했다.
+공개 식품/레시피·승인 FAQ 조회만 release/version별 cache-aside로 보관하는 방향이다.
+개인화 최종 추천·현재 재고·가족/건강/원문·토큰은 캐시하지 않는다.
+반복 조회 통계는 로컬 제한 집계, cloud에는 기존 cache_hit/cache_miss 일별 합계만 전송한다.
+in-memory fake부터 시험하고 필요 시 Redis로 교체한다. 실제 Redis 설치·연결·요금제 변경은 하지 않았다.
+설계/비활성 설정을 추가한 단계이며 provider·패턴 수집기·캐시 테스트는 아직 미구현이다.
+
+## 추가 작업: 식약처 사전 적재·무료 용량 분리
+
+사용자가 무료 플랜과 DB 사전 구축을 확정했다. [용량 설계](A_사전적재_및_용량설계.md)를 추가했다.
+공개 카탈로그 pool은 200MB, 냉장고 변화 영역은 150MB 논리 예약이며 실제 개인 이력은 SQLite 전용이다.
+전체 300MB 목표·350MB 경고·400MB 적재 중단, 원본 gzip 로컬 보관·bounded batch를 적용한다.
+원격 migration kini_catalog_capacity_v1 / kini_catalog_partition_budget_v1을 실제 적용하고
+초과 배치·초과 전체 예산·카탈로그 pool 소진 거절을 rollback 시험했다.
+현재 DB 약 12.1MB, 식품/레시피 0행이다. 정식 두 키는 .env의 빈 항목으로 준비됐고 아직 미설정이다.
+사전 전체 수집 collector/checkpoint, 필드 normalizer, compact provenance SQL 배치 준비 도구를 작성했다.
+신규 적재/용량 테스트 12개 통과, Python compileall 및 git diff --check 확인.
+실제 인증 수집·cloud 적재·publish는 아직 실행하지 않았다. 이전 전체 테스트 결과는 아래와 구분한다.
+
 ## 1. 확정된 방향
 
 - 실제 ThinQ 인증·토큰 발급·기기 연결 없이 ThinQ 스타일 데모를 만든다.

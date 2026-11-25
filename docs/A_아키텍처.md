@@ -170,6 +170,10 @@ publish에는 출처 이용 조건 승인이 필요하다. rollback은 같은 so
 
 ## 7. 캐시·집계·장애 경계
 
+반복 요청 분석·공개 자료 cache-aside·Redis 도입 단계는 [반복 패턴 및 캐시 설계](A_반복패턴_및_캐시_설계.md)를 따른다.
+패턴 분석/캐시 provider/실제 Redis는 아직 미구현이며 config/cache_policy.json은 비활성 설계값이다.
+현재 개인화 추천·원문·재고를 캐시하지 않고 공개 자료 조회만 대상으로 설계한다.
+
 - 제안 캐시 키: `catalog:{source}:{release_id}:{cache_version}:{kind}:{external_id}`. TTL 제안 24시간.
 - Redis miss/장애는 로컬 공개 카탈로그 조회로 처리할 예정. 개인 조건 검사는 항상 B에서 실행한다.
 - 지표는 일별 절대 합계 upsert, 단일 writer. Supabase 지표 장애로 SQLite 재고 변경을 롤백하지 않는다.

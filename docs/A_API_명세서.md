@@ -233,6 +233,10 @@ validate는 통과 시 exit 0, 격리 시 exit 1. 이용 조건 승인 UI/CLI는
 
 ## 6. 후속 계약 — 현재 호출 금지
 
+반복 조회·cache provider의 내부 계약과 TTL/무효화/공개 데이터 allowlist는
+[반복 패턴 및 캐시 설계](A_반복패턴_및_캐시_설계.md)에 추가했다.
+캐시 전용 HTTP endpoint는 추가하지 않았고, 현재 응답이 cache hit를 제공한다고 가정하지 않는다.
+
 가상 기기 목록/상태, 로그인 HTTP, 대기 이벤트 목록/상세, 카탈로그 검색·원격 동기화,
 Redis 상태/TTL·무효화 API는 예정이다. 경로·schema는 아직 확정하지 않았으므로
 C는 기존 설명의 `/api/devices` 등을 구현된 API로 가정하지 않는다.
