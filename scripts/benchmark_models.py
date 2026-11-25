@@ -1,6 +1,6 @@
 """동일 질의 세트로 설치된 Ollama 모델을 비교한다.
 
-예: py .\\scripts\\benchmark_models.py --models qwen2.5:3b-instruct-q4_K_M qwen3:4b
+예: py .\\scripts\\benchmark_models.py --models qwen3:4b qwen3.5:4b-q4_K_M
 """
 from __future__ import annotations
 
@@ -29,10 +29,10 @@ def run_question(model: str, question: str) -> dict[str, object]:
             "stream": False,
             "think": False,
             "messages": [
-                {"role": "system", "content": ("/no_think\n" if model.startswith("qwen3") else "") + "한국어로만, 두 문장 이내로 답하세요. 재료를 추측하지 마세요."},
+                {"role": "system", "content": ("/no_think\n" if model.split(":", 1)[0] == "qwen3" else "") + "한국어로만, 두 문장 이내로 답하세요. 재료를 추측하지 마세요."},
                 {"role": "user", "content": question},
             ],
-            "options": {"temperature": 0.1, "num_predict": 120, "seed": 7},
+            "options": {"temperature": 0.1, "num_predict": 120, "num_ctx": 4096, "seed": 7},
         },
         timeout=120,
     )
