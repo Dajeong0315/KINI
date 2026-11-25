@@ -9,18 +9,27 @@
 PowerShell에서 다음을 실행합니다.
 
 ```powershell
-Set-Location C:\Users\aicam\Desktop\Project_3
-.\.venv\Scripts\Activate.ps1
+# 저장소 폴더에서 실행
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+# 새 Ollama 서버가 로컬 모델만 사용하도록 설정. 기존 서버에는 재시작 필요.
+$env:OLLAMA_NO_CLOUD = "1"
+$env:OLLAMA_HOST = "127.0.0.1:11434"
+ollama pull qwen3.5:4b-q4_K_M
 ollama list
 Invoke-RestMethod http://localhost:11434/api/tags
-python -m pip install -r requirements.txt
-python .\scripts\download_voice_models.py
-python -m app.main
+.\.venv\Scripts\python.exe .\scripts\download_voice_models.py
+.\.venv\Scripts\python.exe .\scripts\local_runtime.py
 ```
 
 준비된 파일을 한 번에 점검하려면 `python .\scripts\run_voice_sample_tests.py`를 실행한다. 전사·답변·생성 WAV 경로를 출력하며, WAV는 `output/audio/`에 저장된다.
 
-브라우저에서 `http://127.0.0.1:5000`을 엽니다. `OLLAMA_MODEL`을 비우면 현재 설치된 `qwen2.5:3b-instruct-q4_K_M`을 사용합니다. `qwen3:4b`를 설치한 뒤에는 `.env`의 `OLLAMA_MODEL=qwen3:4b`로 바꿔 비교할 수 있습니다.
+브라우저에서 `http://127.0.0.1:5000`을 엽니다. 기본 모델은 `qwen3.5:4b-q4_K_M`입니다. 기존 `.env`를 사용한다면 `OLLAMA_MODEL=qwen3.5:4b-q4_K_M`으로 수정한 뒤 앱을 재시작하세요. `OLLAMA_MODEL`이 비어 있으면 같은 기본 모델을 사용합니다. 모델 가중치는 Git에 포함하지 않으며 Ollama로 별도 다운로드합니다.
+
+Qwen3.5는 `think: false`로 호출하며 이전 Qwen3 전용 `/no_think` 문자열을 붙이지 않습니다. 컨텍스트는 4096 토큰으로 제한합니다. 자세한 준비·검증·이전 모델 전환 방법은 [Qwen3.5 실행 가이드](docs/Qwen3_5_4B_실행가이드.md)를 확인하세요.
+
+채팅과 가족 추천 체인은 같은 `OLLAMA_MODEL`을 사용합니다. 로컬 Ollama에 모델을 준비하고, 기존 `.env`에서 다른 모델을 지정했다면 원하는 모델명으로 직접 변경하세요. 추천 체인의 호출 제한시간은 90초이며 모델 출력은 추천 규칙이나 안전 필터를 대체하지 않습니다.
 
 기본 음성 경로는 `models/stt/small`의 faster-whisper 모델과 `models/tts/ko_KR-kss-medium.onnx`의 Piper 음성을 사용합니다. `FOODSAFETY_KOREA_API_KEY`는 COOKRCP01 레시피 검색, `DATA_GO_KR_SERVICE_KEY`는 식품영양성분 조회에만 사용합니다. ElevenLabs 모듈은 호환성을 위해 보존하지만 기본 실행 경로에서는 사용하지 않습니다.
 
@@ -30,9 +39,9 @@ python -m app.main
 
 ```powershell
 python -m pytest
-python .\scripts\benchmark_models.py --models qwen2.5:3b-instruct-q4_K_M
-# qwen3:4b 설치 후 공정 비교
-python .\scripts\benchmark_models.py --models qwen2.5:3b-instruct-q4_K_M qwen3:4b
+.\.venv\Scripts\python.exe .\scripts\benchmark_models.py --models qwen3.5:4b-q4_K_M
+# Qwen3 4B도 설치한 경우 동일 질의 비교
+.\.venv\Scripts\python.exe .\scripts\benchmark_models.py --models qwen3:4b qwen3.5:4b-q4_K_M
 ```
 
 ## 폴더
