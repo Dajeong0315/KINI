@@ -130,10 +130,14 @@ YOLOE-v8m (탐지),Unknown 처리,이름표,USER_LABEL_SIM_SAME_PLACE,0.85,같�
 YOLOE-v8m (탐지),Unknown 처리,이름표,USER_LABEL_SIM,0.95,다른 자리 자동 적용 기준
 YOLOE-v8m (탐지),Unknown 처리,실험결과,포도 이름표 유사도,같은 포도 0.894~0.996 / 다른 물체 0.756~0.881,"주스병 0.881, 오렌지 0.844~0.850, 버터 0.841, 수박 0.756"
 YOLOE-v8m (탐지),Unknown 처리,실험결과,시연 영상 검증,"h265: Unknown 1(포도) → 이름 입력 후 포도 1, 오렌지 −1 / h264: 버터 −1, 오렌지 3",창 모드 2회 연속 동일
-위치 계산,Supabase 연동,LOC,FRIDGE_X_LABELS,L / C / R,화면 가로 3등분 (왼쪽·가운데·오른쪽)
-위치 계산,Supabase 연동,LOC,FRIDGE_FLOOR_SPLITS,0.5,층 경계 (화면 위에서부터 비율)
-위치 계산,Supabase 연동,LOC,FRIDGE_FLOOR_NUMBER_FROM_TOP,False,맨 아래층이 1층
-Supabase,Supabase 연동,테이블,SUPABASE_TABLE,fridge_food,"열: food_id, food_name, food_date_in, food_date_out, loc"
-Supabase,Supabase 연동,전송,SUPABASE_TIMEOUT,5.0초,별도 스레드 1개 (순서 보장)
-Supabase,Supabase 연동,전송,SUPABASE_SEED_FROM_FIRST_BEFORE,True,테이블이 비어 있으면 첫 before 품목으로 채움
-Supabase,Supabase 연동,실험결과,가짜 서버 시험,4종 통과 + h265 영상 전체 실행,"시작 재고 8행 INSERT, 오렌지 1행 food_date_out"
+위치 계산,Supabase 연동,LOC,FRIDGE_X_LABELS,L / C / R,화면 가로 3등분 → stock_event.loc_x
+위치 계산,Supabase 연동,LOC,FRIDGE_FLOOR_SPLITS,0.5,층 경계 (화면 위에서부터 비율) → loc_y
+위치 계산,Supabase 연동,LOC,FRIDGE_FLOOR_NUMBER_FROM_TOP,True,"DB 규칙: 1 = 위 칸, 2 = 아래 칸"
+Supabase,Supabase 연동,DB,스키마,supabase/schema.sql,food_item·capture·stock_event·fridge_stock + current_stock 뷰 + 함수 3개
+Supabase,Supabase 연동,DB,food_item 품목 수,25 (데모 초기 재고 6종),"인식 품목 19종 추가, shelf_days 임시값"
+Supabase,Supabase 연동,전송,SUPABASE_CONFIRM_MODE,local,local: 자동·y/n 으로 confirm/reject 호출 / ipad: pending 만 저장
+Supabase,Supabase 연동,전송,SUPABASE_BASELINE_ON_START,auto,영상 파일 시험 때만 첫 before 로 DB 재고 맞춤 (manual 이벤트)
+Supabase,Supabase 연동,전송,SUPABASE_REGISTER_MISSING_ITEMS / SUPABASE_DEFAULT_SHELF_DAYS,True / 7,사용자 새 품목을 food_item 에 자동 등록
+Supabase,Supabase 연동,전송,SUPABASE_TIMEOUT,5.0초,"별도 스레드 1개 (순서 보장), 5xx·네트워크 오류는 대기열 보관"
+Supabase,Supabase 연동,실험결과,통합 시험 (PostgreSQL + REST 흉내),8종 통과,시작 재고 맞춤·확인 중복 없음·재고 부족 거부·거절·새 품목·재전송·anon 거부
+Supabase,Supabase 연동,실험결과,h265 영상 전체 실행,"capture 1, 이벤트 12 confirmed",최종 버터1·수박1·오렌지2·포도1·주스2

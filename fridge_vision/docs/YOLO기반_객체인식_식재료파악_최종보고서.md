@@ -2,7 +2,7 @@
 
 - 작성일: 2026-11-25
 - 대상: KINI `fridge_vision` 모듈 (부스 시연용 Vision AI 냉장고)
-- 관련 코드: `vision.py`(인식·보정·Unknown), `main.py`(실행·사용자 입력), `supabase_sync.py`(재고 테이블), `config.py`(설정)
+- 관련 코드: `vision.py`(인식·보정·Unknown), `main.py`(실행·사용자 입력), `supabase_sync.py`(재고 DB 연동), `config.py`(설정)
 - 실험 코드: `train_kaggle_cls.py`, `train_clip_probe.py`, `test_fridge_cls.py`, `eval_kaggle_cls.py`, `log_clip_probe.py`
 - 하이퍼파라미터·실험 기록: [`hyperparameters.csv`](hyperparameters.csv)
 
@@ -17,7 +17,7 @@
 | 시연 영상 결과 | h264 영상: 버터 −1 ✓ / h265 영상: 오렌지 −1 ✓ (두 영상 모두 증감 정답) |
 | 처리 시간 | CPU(i7-9700) 사진 1장 약 0.4~0.8초 |
 | Unknown 처리 | 범용 검색어(`object`) + 쪼개진 물체 묶기 + **사용자 이름 입력·기억** |
-| 재고 연동 | Supabase `fridge_food` 테이블 (한 행 = 식재료 1개, 넣은 날·꺼낸 날·칸 위치) |
+| 재고 연동 | Supabase 재고 DB (촬영 기록 → 변경 후보 pending → 확인 함수로 재고 반영, 식재료 1개 = 1행, 칸 위치) |
 | 분류 모델 실험 | Kaggle 시험 정확도 0.876 → **0.9476** (목표 0.95 에 5장 부족). 실사 적용은 보류 |
 
 핵심 결론
@@ -74,7 +74,7 @@ GPU 가 없어서 **연산량이 모델 선택과 학습 방식을 결정하는 
                     ▼
    Unknown 남아 있음 → 사용자에게 이름 입력 → 기억 → 다시 계산               [main.py ask_unknown_labels]
                     ▼
-   재고 반영(inventory.json) → Supabase fridge_food INSERT/UPDATE (백그라운드) [supabase_sync.py]
+   capture + stock_event(pending) → 재고 반영 시 confirm_stock_event() (백그라운드)  [supabase_sync.py]
 ```
 
 ---
@@ -296,50 +296,62 @@ YOLOE 의 품목 혼동(오렌지/레몬, 오일병/주스 등)을 줄이려고 
 
 ---
 
-## 9. Supabase 고내 재고 테이블 연동
+## 9. Supabase 고내 재고 DB 연동
 
-### 9.1 테이블 (`supabase/fridge_food.sql`)
+DB 는 팀 DB 담당이 설계한 구조(테이블 4개 + 뷰 + 함수 3개)를 그대로 쓰고, 인식 코드와 맞물리도록 일부만 보강했다. 자세한 구조·규칙은 [DB 설계 설명](DB_재고테이블_설계_설명.md).
 
-| 열 | 형식 | 내용 |
-|---|---|---|
-| `food_id` | bigint identity PK | 행 번호 |
-| `food_name` | varchar(50) | 품목 한글 이름 |
-| `food_date_in` | date | 넣은 날 |
-| `food_date_out` | date | 꺼낸 날 (안에 있으면 NULL) |
-| `loc` | varchar(10) | 칸 `"X,Y"` — X: L/C/R (왼쪽·가운데·오른쪽), Y: 층(1 = 맨 아래) |
+### 9.1 구조
 
-- 한 행 = 식재료 1개. 현재 재고 = `food_date_out IS NULL`. 뷰 `fridge_food_current` 로 품목·칸별 개수 조회.
-- 요청 명세의 `VARCHAR2`(Oracle)는 PostgreSQL 의 `VARCHAR` 로, 대문자 열 이름은 PostgreSQL 규칙에 따라 소문자로 만들었다.
-- RLS 를 켜고, 부스 PC 는 service_role 키를 `.env` 에만 둔다. anon 정책은 주석으로 제공.
-
-### 9.2 동작
-
-| 인식 결과 | 테이블 작업 |
+| 이름 | 역할 |
 |---|---|
-| 품목 1개 추가 | `INSERT (food_name, food_date_in = 오늘, loc)` |
-| 품목 1개 제거 | 같은 이름·안 꺼낸 행 중 같은 `loc` 우선, 없으면 가장 오래 넣은 행 → `food_date_out = 오늘` |
-| 첫 촬영 + 테이블이 비어 있음 | 첫 before 사진 품목으로 채움 |
-| Unknown | 보내지 않음 (이름표가 붙으면 그 이름으로) |
+| `food_item` | 식재료 목록 (`food_id` = 인식 코드의 item_id) |
+| `capture` | 촬영 1회 = 1행 (엔진, 사진 경로, result.json 원본, 처리 시간) |
+| `stock_event` | 변경 후보 (`pending` → `confirmed`/`rejected`), 칸 `loc_x`·`loc_y` |
+| `fridge_stock` | 실제 재고, 식재료 1개 = 1행 (넣은·꺼낸 시각, 소비기한, 먹음/폐기) |
+| `current_stock` (뷰) | 품목별 현재 개수 (화면용) |
+| `confirm_stock_event()` / `reject_stock_event()` / `reset_demo()` | 재고 반영(선입선출)·거절·초기화 — 한 트랜잭션 |
 
-- 칸(LOC): 상자 중심이 화면 가로 3등분 중 어디인지(X), 세로 경계 `FRIDGE_FLOOR_SPLITS`(기본 0.5) 기준 몇 층인지(Y).
-- 재고에 **반영된** 결과만 전송 ('확인 필요' 거절 시 전송 안 함). 별도 스레드로 보내 화면이 멈추지 않음.
-- 실패 시 `captures/supabase_queue.jsonl` 에 순서대로 보관 → 다음 동기화 때 먼저 재전송.
-- KINI 아키텍처 원칙(Supabase = 비식별 운영 데이터)에 따라 사진·사용자 정보는 보내지 않는다. 식재료 이름·날짜·칸만 보낸다.
+### 9.2 연동 흐름 (`supabase_sync.py`)
+
+| 프로그램 시점 | DB 작업 |
+|---|---|
+| 인식 결과가 나옴 | `capture` 1행 + `stock_event`(pending) 품목·칸별 1행 |
+| 재고 반영 (자동 또는 `y`) | pending 이벤트마다 `confirm_stock_event()` |
+| 거절 (`n`) | `reject_stock_event()` |
+| 영상 파일 시험의 첫 촬영 | DB 재고를 카메라 before 개수에 맞춤 (`source='manual'` 이벤트 → 확인) |
+| 목록에 없는 품목 (사용자 이름표 새 품목) | `food_item` 자동 등록 |
+
+- 칸: 상자 중심이 화면 가로 3등분 중 어디인지(L/C/R), 세로 경계 위·아래(1 = 위 칸, 2 = 아래 칸)인지. DB 규칙과 같게 맞췄다.
+- 멱등성: `capture` 중복 무시, 같은 촬영의 이벤트가 있으면 다시 만들지 않음, pending 이 아닌 이벤트는 다시 확인하지 않음 → 재전송해도 두 번 반영되지 않음.
+- 장애: 네트워크·5xx 는 `captures/supabase_queue.jsonl` 에 보관 후 다음에 먼저 재전송, 재고 부족 같은 4xx 는 로그만 남기고 이벤트는 pending 유지.
+- 보안: 노트북은 service_role 키(`.env`), 화면은 anon 키로 읽기만. 사진은 올리지 않고 경로 문자열만 저장 (KINI 비식별 원칙).
 - 구현: Supabase REST(PostgREST)를 `requests` 로 직접 호출 (추가 라이브러리 없음).
 
-### 9.3 검증 (실제 Supabase 키 없이)
-같은 REST 규칙으로 답하는 가짜 서버(`tests/test_supabase_sync.py`)로 확인했다.
+### 9.3 팀 초안 `schema.sql` 에서 바꾼 점
+
+| 바꾼 점 | 이유 |
+|---|---|
+| `food_item` 에 인식 품목 19종 추가 (초기 재고 0, `shelf_days` 임시값) | 오렌지·버터·수박·포도·주스 등이 외래키 때문에 저장되지 않음 |
+| `service_role` 에 자동 증가 시퀀스 권한 명시 | 서버가 이벤트를 넣을 때 필요 |
+| `stock_event (capture_id)` 인덱스 | 재전송 시 같은 촬영의 이벤트 조회 |
+
+### 9.4 검증 (실제 Supabase 키 없이)
+
+수정한 `schema.sql` 을 **실제 PostgreSQL(pgserver)** 에 그대로 실행하고, Supabase REST 요청을 SQL 로 바꿔 `service_role`/`anon` 역할로 실행하는 시험 서버(`tests/test_supabase_sync.py`)로 확인했다. 함수·GRANT·RLS·외래키가 실제로 동작한다.
 
 | 시험 | 결과 |
 |---|---|
-| 빈 테이블 + 첫 결과 | before 품목으로 채운 뒤 제거 반영 ✓ |
-| 같은 칸 우선 꺼내기 | `R,1` 오렌지 제거 → `R,1` 행에 `food_date_out` ✓ |
-| 서버 장애(503) | 작업 보관 → 복구 후 다음 동기화 때 순서대로 재전송, 대기열 비움 ✓ |
-| 테이블에 없는 품목 꺼내기 | 오류 없이 건너뜀 + 로그 ✓ |
-| 키 미설정 | 연동 없이 실행, 안내 로그 ✓ |
-| **h265 영상 전체 실행** (`main.py` → 가짜 서버) | 시작 재고 8행(버터 C,1 / 수박 L,1 / 오렌지 R,2·R,1·R,1 / 포도 R,1 / 주스 C,1×2) INSERT 후 오렌지 1행 `food_date_out = 2026-11-25` ✓ |
+| 설치 직후 | 품목 25종, 데모 5종 각 1 ✓ |
+| 첫 결과 저장 | 시작 재고 맞춤(manual 11건, 칸별 분리) + capture + 오렌지 −1 pending, 재고는 그대로 ✓ |
+| 확인 / 재확인 | 오렌지 3 → 2, 다시 보내도 2 유지 ✓ |
+| 재고보다 많이 빼기 (수박 −3) | 함수 거부, pending 유지 ✓ |
+| 거절 | rejected, 재고 변화 없음 ✓ |
+| 새 품목 `user_1` | food_item 자동 등록, 칸 L,2 ✓ |
+| 네트워크 장애 | 2개 보관 → 복구 후 재전송, 사과 +2 ✓ |
+| anon 키 | 읽기 성공, 쓰기·`reset_demo()` 거부(401) ✓ |
+| **h265 영상 전체 실행** (`main.py`) | capture 1행(4640ms), 이벤트 12건 confirmed, 오렌지 1개 consumed → 버터 1·수박 1·오렌지 2·포도 1·주스 2 ✓ |
 
-**실제 Supabase 프로젝트 URL·키로는 아직 확인하지 않았다.** `.env` 에 넣고 한 번 실행해 확인이 필요하다.
+시험용 PostgreSQL(Windows)에는 시간대 데이터가 없어 `'Asia/Seoul'` 을 같은 뜻의 `+09:00` 으로 바꿔 실행했다. **실제 Supabase 프로젝트에서는 아직 실행하지 않았다.**
 
 ---
 
@@ -351,14 +363,14 @@ YOLOE 의 품목 혼동(오렌지/레몬, 오일병/주스 등)을 줄이려고 
 3. 사용자 이름표 생김새 비교는 배경 영향이 커서 같은 자리일 때 주로 동작한다 (옮기면 재질문).
 4. 오일·식초병이 주스로 세어진다 (증감에는 영향 없음, 재고 개수에는 포함).
 5. 칸(LOC) 경계는 화면 비율 근사값 → 부스 카메라에서 조정 필요.
-6. Supabase 는 가짜 서버로만 검증. 응답을 못 받은 요청은 재전송하므로 드물게 중복 가능.
+6. Supabase 는 실제 PostgreSQL + REST 흉내 서버로 검증. 실제 Supabase 프로젝트에서는 아직 미실행. `shelf_days` 는 임시값.
 7. 분류 모델 실험은 Kaggle 0.9476 (목표 0.95 미달), 실사 적용 불가.
 
 ### 다음 단계
 
 | 우선순위 | 작업 | 기대 효과 |
 |---|---|---|
-| 1 | 실제 Supabase 프로젝트에 테이블 생성·연결 확인 | 팀 재고 DB 반영 |
+| 1 | 실제 Supabase 프로젝트에 `schema.sql` 실행·연결 확인, [결정 필요] 항목 확정 | 팀 재고 DB 반영 |
 | 2 | 부스 카메라 위치 고정 후 `FRIDGE_FLOOR_SPLITS`·감지 기준값 조정 | 칸·문 닫힘 감지 정확도 |
 | 3 | **데이터 수집 모드**: 촬영 시 YOLOE 상자 crop 과 사용자 이름표를 품목 폴더에 저장 | 실사 학습 데이터 확보 |
 | 4 | 부스 사진 품목당 30~100장 + Kaggle 데이터로 분류층 재학습 (특징 캐시 방식이라 수 분) | 실사 정확도, 오렌지/망고 혼동 해소 |
@@ -372,7 +384,7 @@ YOLOE 의 품목 혼동(오렌지/레몬, 오일병/주스 등)을 줄이려고 
 | 경로 | 내용 |
 |---|---|
 | `vision.py`, `main.py`, `config.py` | 인식·보정·Unknown·사용자 입력 |
-| `supabase_sync.py`, `supabase/fridge_food.sql`, `tests/test_supabase_sync.py` | 재고 테이블 연동·스키마·시험 |
+| `supabase_sync.py`, `supabase/schema.sql`, `tests/test_supabase_sync.py`, `docs/DB_재고테이블_설계_설명.md` | 재고 DB 연동·스키마·시험·설계 설명 |
 | `models/kaggle_fridge_cls.pt` (Git 미포함) | 1단계 YOLOv8m-cls (test 0.876) |
 | `models/clip_probe.pt` (Git 미포함) | 최종 분류 앙상블 (test 0.9476) |
 | `runs/` (Git 미포함) | 학습 기록, 특징 캐시, 실사 판정 그림 |
@@ -384,7 +396,7 @@ YOLOE 의 품목 혼동(오렌지/레몬, 오일병/주스 등)을 줄이려고 
 # 시연
 python main.py                                   # h265 영상 + YOLOE + Unknown 이름 입력 + Supabase
 python main.py --compare samples/real_before.jpg samples/real_after.jpg
-python tests/test_supabase_sync.py               # 가짜 Supabase 서버로 연동 시험
+python tests/test_supabase_sync.py               # 실제 PostgreSQL + REST 흉내 서버로 연동 시험
 
 # 분류 모델 실험 (Kaggle 데이터 필요)
 python train_kaggle_cls.py                       # 1단계 YOLOv8m-cls

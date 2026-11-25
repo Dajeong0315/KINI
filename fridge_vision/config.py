@@ -148,31 +148,29 @@ DEMO_SCENARIO = [
 ]
 
 # ---------------------------------------------------------------------------
-# 7. Supabase 고내 재고 테이블 연동 (supabase_sync.py)
-#    한 행 = 냉장고 안 식재료 1개.  넣으면 INSERT, 꺼내면 FOOD_DATE_OUT 을 오늘 날짜로 UPDATE.
-#    현재 재고 = FOOD_DATE_OUT 이 비어 있는(NULL) 행.  테이블 만들기: supabase/fridge_food.sql
-#    URL·키는 .env 의 SUPABASE_URL, SUPABASE_KEY. 비어 있으면 연동하지 않고 로그만 남김.
+# 7. Supabase 고내 재고 DB 연동 (supabase_sync.py, 구조: supabase/schema.sql)
+#    인식 결과 → capture + stock_event(pending) 저장 → 재고 반영 시 confirm_stock_event() / 거절 시 reject_stock_event()
+#    URL·키는 .env 의 SUPABASE_URL, SUPABASE_KEY(service_role). 비어 있으면 연동하지 않고 로그만 남김.
 # ---------------------------------------------------------------------------
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()   # service_role 키는 이 PC(.env)에만 두고 절대 공유 금지
-SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "fridge_food")
-# 열 이름. PostgreSQL 은 따옴표 없이 만든 이름을 소문자로 저장 → FOOD_NAME 은 food_name 으로 접근
-SUPABASE_COLUMNS = {
-    "pk": "food_id",               # PK (자동 증가)
-    "name": "food_name",           # FOOD_NAME  VARCHAR  — 품목 한글 이름 (config.ITEMS 의 name)
-    "date_in": "food_date_in",     # FOOD_DATE_IN  DATE — 넣은 날
-    "date_out": "food_date_out",   # FOOD_DATE_OUT DATE — 꺼낸 날 (냉장고 안에 있으면 NULL)
-    "loc": "loc",                  # LOC  VARCHAR — "X,Y"  예: "L,1"
-}
 SUPABASE_TIMEOUT = 5.0            # 초. 네트워크가 느려도 화면이 멈추지 않도록 별도 스레드에서 보냄
 SUPABASE_QUEUE_FILE = CAPTURE_DIR / "supabase_queue.jsonl"   # 보내기 실패한 작업 → 다음 동기화 때 다시 보냄
-# 프로그램 첫 촬영 때 테이블에 '안에 있는' 행이 하나도 없으면, 첫 before 사진의 품목으로 테이블을 채움
-SUPABASE_SEED_FROM_FIRST_BEFORE = True
+# 재고 확인을 어디서 하나
+#   "local": 이 프로그램이 확인 (자동 반영 또는 창에서 y/n) → confirm/reject 함수 호출
+#   "ipad" : 이벤트를 pending 으로만 저장하고 iPad 화면에서 확인을 기다림
+SUPABASE_CONFIRM_MODE = os.getenv("SUPABASE_CONFIRM_MODE", "local")
+# 첫 촬영 때 DB 재고를 카메라가 본 before 개수에 맞출지 (source='manual' 이벤트로 기록)
+#   "auto": 영상 파일로 시험할 때만 맞춤 (부스 카메라는 reset_demo() 로 실제 냉장고와 맞춰 두고 시작)
+SUPABASE_BASELINE_ON_START = "auto"          # "auto" | True | False
+# food_item 에 없는 품목(사용자가 Unknown 에 붙인 새 이름 등)이 나오면 자동 등록할지 (외래키 때문)
+SUPABASE_REGISTER_MISSING_ITEMS = True
+SUPABASE_DEFAULT_SHELF_DAYS = 7              # 자동 등록 품목의 보관 일수 (임시값)
 
-# 위치(LOC) 계산: 사진 속 물체 상자 중심이 어느 칸인지
-#   X: 화면을 가로로 나눈 칸 이름 (왼쪽부터). 시연 냉장고: 왼쪽·가운데·오른쪽
+# 위치(loc_x, loc_y) 계산: 사진 속 물체 상자 중심이 어느 칸인지 (DB 규칙: 3×2 격자)
+#   X: 화면을 가로로 나눈 칸 이름 (왼쪽부터) L=왼쪽, C=가운데, R=오른쪽
 #   Y: 냉장고 층. FRIDGE_FLOOR_SPLITS = 층 경계(화면 위에서부터 0~1 비율). 2층이면 경계 1개
 #      카메라 각도에 맞게 부스에서 조정하세요 (captures/*/after_yolo.jpg 로 확인)
-FRIDGE_X_LABELS = ["L", "C", "R"]          # L=왼쪽, C=가운데, R=오른쪽
-FRIDGE_FLOOR_SPLITS = [0.5]                # 화면 위 절반 = 위층, 아래 절반 = 아래층
-FRIDGE_FLOOR_NUMBER_FROM_TOP = False       # False: 맨 아래층이 1층 (건물처럼) / True: 맨 위층이 1층
+FRIDGE_X_LABELS = ["L", "C", "R"]
+FRIDGE_FLOOR_SPLITS = [0.5]                # 화면 위 절반 = 1층(위 칸), 아래 절반 = 2층(아래 칸)
+FRIDGE_FLOOR_NUMBER_FROM_TOP = True        # DB 규칙: 1 = 위 칸, 2 = 아래 칸

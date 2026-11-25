@@ -222,11 +222,12 @@ def run_compare(args) -> None:
 
 def run_stream(args) -> None:
     comparer = make_comparer(args.engine)
-    sync = None
-    if not args.no_sync and args.engine != "mock":   # mock(가짜 결과)은 실제 테이블에 보내지 않음
-        from supabase_sync import InventorySync
-        sync = InventorySync(log=log)
     cap, is_file, fps, warmup, stop_at = open_source(args.source)
+    sync = None
+    if not args.no_sync and args.engine != "mock":   # mock(가짜 결과)은 실제 DB 에 보내지 않음
+        from supabase_sync import InventorySync
+        b = config.SUPABASE_BASELINE_ON_START
+        sync = InventorySync(log=log, baseline=is_file if b == "auto" else bool(b))
     det = DoorEventDetector()
     pool = ThreadPoolExecutor(max_workers=1)
     pending = None          # (future, after_frame, capture_dir)
@@ -253,7 +254,7 @@ def run_stream(args) -> None:
         status = "applied: " + ascii_summary(result)
         log(f"재고 반영 → {stock_text(inventory)}")
         if sync is not None:
-            sync.push(result)       # Supabase 고내 재고 테이블 갱신 (백그라운드)
+            sync.decide(result, "confirm")   # Supabase: 이 촬영의 pending 이벤트 → confirm_stock_event()
 
     def start_vision(event):
         nonlocal pending, status, captured_any
@@ -341,6 +342,8 @@ def run_stream(args) -> None:
                     result = ask_unknown_labels(comparer, result, cv2.imread(str(out / "before.jpg")),
                                                 after_frame, out.name, show=True)
                 save_json(out / "result.json", result)
+                if sync is not None:
+                    sync.record(result)      # Supabase: capture + stock_event(pending)
                 if result["needs_confirmation"] and not args.no_window:
                     result["_pending"] = True
                     awaiting = (result, after_frame)
@@ -369,6 +372,8 @@ def run_stream(args) -> None:
                 else:
                     status = "rejected"
                     log("결과 거절 → 재고·기준 화면 유지")
+                    if sync is not None:
+                        sync.decide(result, "reject")   # Supabase: reject_stock_event()
 
     # 영상 파일이 끝날 때까지 문 닫힘이 한 번도 감지되지 않았으면 마지막 화면으로 촬영
     if not captured_any:
@@ -387,6 +392,8 @@ def run_stream(args) -> None:
                 result = ask_unknown_labels(comparer, result, cv2.imread(str(out / "before.jpg")),
                                             after_frame, out.name, show=True)
             save_json(out / "result.json", result)
+            if sync is not None:
+                sync.record(result)
             apply(result, after_frame)
         except Exception as e:
             log(f"Vision 실패: {e}")

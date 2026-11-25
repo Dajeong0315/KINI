@@ -11,7 +11,7 @@ GPU 없는 노트북(CPU)에서 돌아가도록 만들었고, ESP32·아두이�
   → 보정: 고정 카메라 규칙(같은 자리 = 같은 물건, 화면이 안 바뀐 자리는 그대로)으로 오인식·놓침 보정
   → Unknown: 목록에 없거나 잘게 쪼개진 물체 → 사용자에게 이름을 물어보고 기억
   → 코드: 품목별 개수 차이 = 추가·제거, 확인 필요 여부 판단
-  → captures/ 에 사진·결과 JSON·현재 재고 저장  +  Supabase 재고 테이블 INSERT / UPDATE
+  → captures/ 에 사진·결과 JSON·현재 재고 저장  +  Supabase 재고 DB (capture·stock_event → confirm_stock_event)
 ```
 
 시연 영상 2개에서 결과가 맞았습니다 (h264: 버터 −1, h265: 오렌지 −1).
@@ -26,15 +26,15 @@ GPU 없는 노트북(CPU)에서 돌아가도록 만들었고, ESP32·아두이�
 | `main.py` | 실행 파일 (영상 처리 루프, 키 조작, Unknown 이름 입력, 결과 저장, Supabase 전송) |
 | `detector.py` | 문 닫힘(장면 안정) 감지기 |
 | `vision.py` | 인식 엔진 3종(YOLO / OpenAI / MOCK), 전후 보정, Unknown 처리, 추가·제거 계산, 위치(LOC) 계산 |
-| `supabase_sync.py` | Supabase 고내 재고 테이블 갱신 (백그라운드 전송, 실패 시 보관 후 재전송) |
+| `supabase_sync.py` | Supabase 고내 재고 DB 연동 (촬영 기록·변경 후보 저장, 확인·거절 함수 호출, 실패 시 보관 후 재전송) |
 | `config.py` | 품목 목록, 감지·인식 기준값, Supabase 열 이름, 냉장고 칸 나누기 — **설정은 여기서만 수정** |
-| `supabase/fridge_food.sql` | Supabase 에 재고 테이블을 만드는 SQL |
-| `tests/test_supabase_sync.py` | 가짜 Supabase 서버로 연동 시험 |
+| `supabase/schema.sql` | Supabase 재고 DB (테이블 4개·뷰·함수·권한) 를 만드는 SQL |
+| `tests/test_supabase_sync.py` | 실제 PostgreSQL + Supabase REST 흉내 서버로 연동 시험 |
 | `make_dummy_video.py` | 실제 촬영본 없이 시험할 수 있는 더미 냉장고 영상 생성 |
 | `samples/` | 실제 영상에서 뽑은 시험 사진 2장 |
 | `.vscode/launch.json` | VS Code '실행 및 디버그' 메뉴용 실행 설정 0~7 |
 | `.env.example` | API 키·Supabase 설정 예시 |
-| `docs/` | 최종 보고서, 하이퍼파라미터·실험 기록(CSV) |
+| `docs/` | 최종 보고서, DB 설계 설명, 하이퍼파라미터·실험 기록(CSV) |
 | `train_kaggle_cls.py`, `train_clip_probe.py`, `test_fridge_cls.py`, `eval_kaggle_cls.py`, `log_clip_probe.py` | (실험) Kaggle 데이터로 만든 식재료 분류 모델 학습·평가. 메인 실행에는 쓰지 않음 |
 
 실행 중 생기는 파일 (Git 에 올리지 않음)
@@ -69,7 +69,7 @@ GPU 없는 노트북(CPU)에서 돌아가도록 만들었고, ESP32·아두이�
    ```
 4. `Ctrl + Shift + P` → `Python: Select Interpreter` → `.venv` 를 선택합니다.
 5. `.env.example` 을 복사해 이름을 `.env` 로 바꿉니다.
-   - Supabase 에 재고를 올리려면 `SUPABASE_URL`, `SUPABASE_KEY` 를 넣습니다 (6장). 비워 두면 연동 없이 동작합니다.
+   - Supabase 재고 DB 에 반영하려면 `SUPABASE_URL`, `SUPABASE_KEY`(service_role) 를 넣습니다 (6장). 비워 두면 연동 없이 동작합니다.
    - OpenAI 엔진을 쓸 때만 `OPENAI_API_KEY` 가 필요합니다. 기본 엔진(YOLO)은 키가 필요 없습니다.
 
 **처음 실행할 때 자동으로 내려받는 파일** (인터넷 필요, 한 번만)
@@ -192,7 +192,7 @@ captures/
   "before": {"butter": 1, "watermelon": 1, "orange": 3, "grape": 1, "juice": 2, "...": 0},
   "after":  {"butter": 1, "watermelon": 1, "orange": 2, "grape": 1, "juice": 2, "...": 0},
   "added": [],
-  "removed": [{"item_id": "orange", "name": "오렌지", "quantity": 1, "locations": ["R,2"]}],
+  "removed": [{"item_id": "orange", "name": "오렌지", "quantity": 1, "locations": ["R,1"]}],
   "uncertain_items": [],
   "hand_or_open_door_visible": false,
   "needs_confirmation": false,
@@ -206,53 +206,53 @@ captures/
 
 ---
 
-## 6. Supabase 고내 재고 테이블 연동
+## 6. Supabase 고내 재고 DB 연동
 
-### 테이블 구조 (`supabase/fridge_food.sql`)
+DB 구조와 규칙은 [DB 설계 설명](docs/DB_재고테이블_설계_설명.md), 만드는 SQL 은 [`supabase/schema.sql`](supabase/schema.sql) 에 있습니다.
 
-| 열 | 형식 | 내용 |
-|---|---|---|
-| `food_id` | bigint (PK, 자동 증가) | 행 번호 |
-| `food_name` | varchar(50) | 품목 한글 이름 (예: 오렌지, 포도) |
-| `food_date_in` | date | 넣은 날 |
-| `food_date_out` | date | 꺼낸 날. **냉장고 안에 있으면 NULL** |
-| `loc` | varchar(10) | 칸 `"X,Y"` — X: `L`(왼쪽)·`C`(가운데)·`R`(오른쪽), Y: 층 번호(1 = 맨 아래) |
+```text
+인식 결과 ─▶ capture(촬영 기록) + stock_event(변경 후보, pending)
+재고에 반영(자동 또는 y) ─▶ confirm_stock_event() ─▶ fridge_stock(식재료 1개 = 1행) 갱신
+거절(n) ─▶ reject_stock_event() ─▶ 재고 그대로
+화면(iPad·모니터) ◀── current_stock(현재 재고 뷰)
+```
 
-- **한 행 = 냉장고 안 식재료 1개**입니다. 현재 재고 = `food_date_out IS NULL` 인 행 (뷰 `fridge_food_current` 로 품목·칸별 개수 확인).
-- PostgreSQL 은 따옴표 없는 이름을 소문자로 저장하므로 `FOOD_NAME` 은 `food_name` 으로 씁니다. Oracle 의 `VARCHAR2` 는 PostgreSQL 에서 `VARCHAR` 입니다.
+| 테이블·뷰 | 내용 |
+|---|---|
+| `food_item` | 식재료 25종 (`food_id` = `config.ITEMS` 의 item_id, 보관 일수, 기본 칸) |
+| `capture` | 촬영 1회 = 1행 (엔진, 사진 경로, result.json 원본, 처리 시간) |
+| `stock_event` | "오렌지 −1 (R,1)" 같은 변경 후보. `pending` → `confirmed` / `rejected` |
+| `fridge_stock` | 실제 재고. 식재료 1개 = 1행, `date_out` 이 NULL 이면 냉장고 안, 소비기한·먹음/폐기 기록 |
+| `current_stock` | 품목별 현재 개수와 가장 가까운 소비기한 (화면용) |
 
 ### 동작
-
-| 인식 결과 | 테이블 작업 |
-|---|---|
-| 품목 1개 추가 | `INSERT (food_name, food_date_in = 오늘, loc)` |
-| 품목 1개 제거 | 같은 이름·아직 안 꺼낸 행 중 **같은 칸(loc)** 행, 없으면 가장 오래 넣은 행 → `food_date_out = 오늘` |
-| 프로그램 첫 촬영 + 테이블에 안에 있는 행이 없음 | 첫 before 사진의 품목으로 테이블을 채움 (`SUPABASE_SEED_FROM_FIRST_BEFORE`) |
-| Unknown | 보내지 않음 (이름표를 붙이면 그 이름으로 보냄) |
-
-- 재고에 **반영된** 결과만 보냅니다. '확인 필요'에서 `n`(거절)한 결과는 보내지 않습니다.
-- 전송은 별도 스레드에서 하므로 네트워크가 느려도 화면이 멈추지 않습니다.
-- 실패하면 작업을 `captures/supabase_queue.jsonl` 에 순서대로 보관했다가 다음 동기화 때 먼저 보냅니다.
-- 사진·사용자 정보는 보내지 않습니다 (KINI 아키텍처의 Supabase 비식별 원칙).
-- 칸(LOC)은 사진 속 상자 중심으로 계산합니다. 경계는 `config.FRIDGE_X_LABELS`, `FRIDGE_FLOOR_SPLITS` 에서 카메라 각도에 맞게 조정합니다.
+- 같은 품목이라도 **칸이 다르면 이벤트를 칸마다** 저장합니다. 칸 `loc_x`(L·C·R) / `loc_y`(1 = 위 칸, 2 = 아래 칸)는 사진 속 상자 위치로 계산합니다.
+- 꺼낼 때는 DB 함수가 **가장 먼저 들어온 것**을 꺼낸 것으로 기록합니다. 재고보다 많이 빼면 함수가 거부하고 이벤트는 pending 으로 남습니다.
+- **영상 파일로 시험할 때**는 첫 촬영에서 DB 재고를 카메라가 본 before 개수에 맞춥니다 (`source='manual'` 이벤트). 부스 카메라는 `reset_demo()` 로 실제 냉장고와 맞춰 두고 시작합니다 (`config.SUPABASE_BASELINE_ON_START = "auto"`).
+- 사용자가 Unknown 에 새 이름을 붙이면 `food_item` 에 자동 등록합니다 (`user_1` …, 보관 일수 7일 임시값).
+- iPad 에서 확인하려면 `.env` 에 `SUPABASE_CONFIRM_MODE=ipad` → 이 프로그램은 pending 이벤트만 저장합니다.
+- 전송은 별도 스레드에서 순서대로 합니다. 네트워크·서버 오류면 `captures/supabase_queue.jsonl` 에 보관했다가 다음에 먼저 보냅니다. 모든 작업은 다시 보내도 두 번 반영되지 않습니다.
+- 사진·사용자 정보는 보내지 않습니다 (사진은 로컬 경로 문자열만). KINI 아키텍처의 Supabase 비식별 원칙을 따릅니다.
 
 ### 설정 순서
-1. Supabase 대시보드 → **SQL Editor** 에 `supabase/fridge_food.sql` 을 붙여 넣고 Run
-2. **Project Settings → API** 에서 Project URL 과 키를 복사해 `.env` 에 입력
+1. Supabase 대시보드 → **SQL Editor** 에 `supabase/schema.sql` 전체를 붙여 넣고 Run
+2. `select * from current_stock order by food_id;` → 25개 품목(두부·달걀·브로콜리·버섯·닭고기 1)이 보이면 성공
+3. **Project Settings → API** 에서 Project URL 과 **service_role** 키를 `.env` 에 입력
    ```text
    SUPABASE_URL=https://프로젝트ID.supabase.co
-   SUPABASE_KEY=...        # 부스 PC 는 service_role 키 (RLS 우회). 이 PC 밖으로 절대 유출 금지
-   SUPABASE_TABLE=fridge_food
+   SUPABASE_KEY=...            # service_role 키. 이 PC 밖(GitHub·iPad 코드)으로 절대 유출 금지
+   SUPABASE_CONFIRM_MODE=local
    ```
-   anon 키를 쓰려면 SQL 파일 아래쪽의 RLS 정책 주석을 풀어 필요한 권한만 허용합니다.
-3. `python main.py` 실행 → 로그에 `Supabase: INSERT 오렌지 (R,1)` 같은 줄이 나오면 연결된 것입니다.
-4. 이미 다른 이름의 테이블·열을 쓰고 있다면 `.env` 의 `SUPABASE_TABLE` 과 `config.SUPABASE_COLUMNS` 만 바꿉니다.
+4. `python main.py` 실행 → 로그에 `Supabase: 촬영 기록 + 변경 후보 1건 저장 (pending) — orange -1`, `Supabase: orange -1 → 재고 반영 (1개)` 가 나오면 연결된 것입니다.
+
+화면(iPad·모니터)은 **anon 키로 읽기만** 할 수 있습니다 (쓰기·함수 실행은 RLS·권한으로 거부).
 
 ### 시험 (Supabase 계정 없이)
 ```bash
+pip install pgserver "psycopg[binary]"      # 시험용 PostgreSQL (Python 3.12 권장)
 python tests/test_supabase_sync.py
 ```
-같은 REST 규칙으로 답하는 가짜 서버를 띄워 시작 재고 채우기, 같은 칸 우선 꺼내기, 서버 장애 시 보관 후 재전송, 없는 품목 꺼내기를 확인합니다.
+실제 PostgreSQL 에 `schema.sql` 을 그대로 실행하고, Supabase REST 요청을 SQL 로 바꿔 service_role / anon 역할로 실행하는 시험 서버로 확인합니다. 시작 재고 맞추기, 확인·재확인(중복 없음), 재고 부족 거부, 거절, 새 품목 자동 등록, 네트워크 장애 후 재전송, anon 쓰기 거부를 검사합니다.
 
 ---
 
@@ -322,6 +322,7 @@ YOLOE 상자를 잘라 다시 분류하는 2단계 인식을 시험했습니다.
 - 범용 검색어(`object`) 방식은 시연 영상에서 Unknown 을 만들지 못했습니다. 실제로 동작한 것은 '쪼개진 물체 묶기 + 사용자 이름표'입니다.
 - 사용자 이름표의 생김새 비교(CLIP)는 냉장고 배경이 비슷하면 다른 물체끼리도 유사도가 높게 나옵니다. 그래서 같은 자리일 때 주로 동작하고, 다른 칸으로 옮기면 다시 물어볼 수 있습니다.
 - 칸(LOC) 경계는 화면을 같은 비율로 나눈 근사값입니다. 실제 부스 카메라 각도에서 `FRIDGE_FLOOR_SPLITS` 를 맞춰야 합니다.
-- Supabase 연동은 가짜 서버로만 시험했습니다. **실제 프로젝트 URL·키로 한 번 확인해야 합니다.** 응답을 받지 못한 요청은 다시 보내므로, 드물게 같은 작업이 두 번 들어갈 수 있습니다.
+- Supabase 연동은 실제 PostgreSQL + REST 흉내 서버로 시험했습니다. **실제 Supabase 프로젝트 URL·키로 한 번 확인해야 합니다.**
+- `food_item` 의 보관 일수(`shelf_days`)는 임시값입니다 (DB 설계 설명 10장).
 - OpenAI 엔진은 요청 형식까지만 검증했습니다 (크레딧 없음).
 - iPad 확인 화면·옆 모니터 연동(Socket.IO)은 아직 없습니다. 지금은 `y`/`n` 키가 iPad 확인 버튼 역할을 합니다.
