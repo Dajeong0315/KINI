@@ -5,7 +5,7 @@ from pathlib import Path
 from .recommendation_models import RecommendationRequest
 from .ollama import configured_model
 
-PROMPT_VERSION='recommendation-1'
+PROMPT_VERSION='recommendation-2'
 PROMPT_DIR=Path(__file__).resolve().parents[1] / 'prompts'
 
 def _local_settings():
