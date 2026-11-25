@@ -125,6 +125,24 @@ curl -X POST http://127.0.0.1:5000/api/recommendations \
 
 ## 재료 정규화와 데이터 품질
 
+### A 데이터 플랫폼 문서
+
+| 문서 | 내용 |
+|---|---|
+| [A 개발 현황](docs/A_개발현황.md) | 이번 브랜치 변경·실제 Supabase 작업·검증·남은 통합 |
+| [A API 명세서](docs/A_API_명세서.md) | 실제 endpoint·JSON·권한·오류·재시도 |
+| [A 기능 명세서](docs/A_기능_명세서.md) | 기능별 구현 상태·완료 기준·B/C 의존성 |
+| [A 아키텍처](docs/A_아키텍처.md) | 구성도·ERD·시퀀스·개인정보 경계 |
+
+DB 구조·개인정보 세션·식약처 카탈로그 import·Supabase 운영 지표 경계는
+[DB 아키텍처 및 연동 설계](docs/DB_아키텍처_및_연동_설계.md)를 참고하세요.
+`scripts/init_database.py`는 빈 private DB를 만들며, 시연 DB는 별도 경로와 `--demo`로 생성합니다.
+인증 repository는 추가됐지만 기존 HTTP API의 인증은 아직 적용되지 않았습니다.
+`GET /api/data/status` 계약은 [API 계약서](docs/API_계약서.md)에 정의했습니다.
+첨부 인식·하이브리드 LLM 흐름에 대한 담당별 연결과 수정 제안은
+[워크플로우 반영 설계](docs/워크플로우_반영_설계.md)를 참고하세요.
+Supabase 공개 카탈로그 테이블은 생성됐으며, 가구별 재고·인식 이벤트는 로컬 SQLite에 저장합니다.
+
 `POST /api/inventory/normalize` 요청 예: `{"name":"당근 1개","quantity":1,"unit":"개"}`. 응답은 정규 재료와 변환 결과를 포함하며, 실제 무게의 근거가 없으면 `conversion.status`가 `needs_confirmation`, `quantity_g`가 null입니다. 예를 들어 사용자가 실제 중량을 확인하면 `{"household_id":1,"ingredient_id":3,"name":"당근","quantity":200,"unit":"g"}`을 `POST /api/inventory/items`에 보내 저장할 수 있습니다. `GET /api/ingredients/search?q=당근`은 정규 재료를 조회합니다. ml/L은 부피로만 변환하고 밀도 없이 g으로 바꾸지 않습니다. 사용자 제품명이나 복합 재료는 라벨 확인 대상으로 남습니다.
 
 추천 및 조리 응답의 `data_quality`는 `verified`, `partially_verified`, `confirmation_required`, `demo_data`로 구분합니다. 현재 엔진은 교차접촉 확인 안내를 항상 표시하므로 실제 안전 보증 의미의 `verified`는 반환하지 않습니다. `demo_data`도 `requires_confirmation: true`이며 실제 음식·영양 판단에 사용할 수 없습니다. `data_status=verified`인 재고는 입력 이름과 중량이 정규화됐다는 뜻일 뿐 제품 안전이나 라벨 검증을 뜻하지 않습니다. 알레르기 충돌·라벨 미확인·영양 누락 등은 `excluded_candidates[].reason_codes`에 표시하고, 후보가 없으면 `status: no_safe_recommendation`입니다. 자세한 출처 정책은 [데이터 안전 설계](docs/데이터_안전_정규화_설계.md)를 참고하세요.
