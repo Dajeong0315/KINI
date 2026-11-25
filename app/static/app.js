@@ -1,140 +1,90 @@
-const shell = document.querySelector("#app-shell");
-const views = [...document.querySelectorAll(".view")];
-const navigation = [...document.querySelectorAll("[data-view-link]")];
-const toast = document.querySelector("#toast");
-const inventoryList = document.querySelector("#inventory-list");
-const nutritionCard = document.querySelector("#nutrition-card");
+/* Existing KINI design + six synthetic scenario flows. */
+(() => {
+const api=KINIAPI.createClient(),$=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)],view=(n)=>$(`[data-view="${n}"]`);
+const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
+const btn=(text,action,cls="outline")=>{const n=el("button",text,cls);n.type="button";n.addEventListener("click",action);return n;};
+const clear=(n,...children)=>{n.replaceChildren(...children);return n;},note=(t)=>el("p",t,"data-note"),num=(n)=>Math.round(n*10)/10;
+const diabetesLabels={unspecified:"미입력",no:"없음 (사용자 입력)",yes:"있음 (사용자 입력)"};
+const goals=["영양 균형","단백질 관리","나트륨 관리","채소 섭취"],meals={breakfast:"아침",lunch:"점심",dinner:"저녁"},catalog=api.catalog(),ingredient=(id)=>catalog.find((i)=>i.id===id);
+let state=api.read(),busy=false,scenario="success",reportMember=1,reportDays=7,recordMode="cooked",recordMethod="manual",directRecipe=1,portions={},portionKey="",photoURL=null,savedDirect=false,toastTimer;
+function field(label,{type="text",value="",options,min,max,step,required=false,maxLength}={}){const node=el("label",label,"scenario-field"),input=el(options?"select":"input");if(options)options.forEach((o)=>{const [v,t]=Array.isArray(o)?o:[o,o],option=el("option",t);option.value=v;input.append(option);});else input.type=type;input.value=value;input.required=required;for(const [key,v]of Object.entries({min,max,step,maxLength}))if(v!==undefined)input[key]=v;node.append(input);return{node,input};}
+function check(text){const node=el("label",undefined,"scenario-check"),input=el("input");input.type="checkbox";node.append(input,el("span",text));return{node,input};}
+function notify(text){$("#toast").textContent=text;$("#toast").classList.add("visible");clearTimeout(toastTimer);toastTimer=setTimeout(()=>$("#toast").classList.remove("visible"),3500);}
+function closeDialog(){$("#scenario-dialog").close();}
+$("#scenario-dialog").addEventListener("close",()=>{if(photoURL)URL.revokeObjectURL(photoURL);photoURL=null;});
+$("#dialog-close").addEventListener("click",closeDialog);
+function dialog(title,build){if($("#scenario-dialog").open)closeDialog();$("#dialog-title").textContent=title;$("#dialog-error").hidden=true;build(clear($("#dialog-body")));$("#scenario-dialog").showModal();}
+function error(e){if($("#scenario-dialog").open){$("#dialog-error").textContent=e.message;$("#dialog-error").hidden=false;}else notify(e.message);}
+async function call(method,...args){if(busy){notify("처리 중입니다. 잠시 기다려 주세요.");return null;}busy=true;document.body.setAttribute("aria-busy","true");try{const result=await api.call(method,...args);state=api.read();return result;}catch(e){error(e);return null;}finally{busy=false;document.body.setAttribute("aria-busy","false");}}
+function go(name,hash=true){if(!view(name))name="home";if(name==="recipe"&&!state.picked){notify("현재 추천 메뉴를 먼저 선택해 주세요.");name="recommend";}if(name==="cook"&&!state.cooking){notify("레시피에서 조리를 시작해 주세요.");name=state.picked?"recipe":"recommend";}$$('.view').forEach((v)=>v.classList.toggle("active",v.dataset.view===name));$$('[data-view-link]').forEach((b)=>b.classList.toggle("active",b.dataset.viewLink===name));if(hash)history.replaceState(null,"",`#${name}`);$(".content").scrollTo({top:0,behavior:"auto"});window.scrollTo({top:0,behavior:"auto"});const title=$("h1",view(name));if(title){title.tabIndex=-1;title.focus({preventScroll:true});}if(name==="recommend"&&!state.result&&!busy)recommend();}
+document.addEventListener("click",(e)=>{const link=e.target.closest("[data-view-link]");if(link){e.preventDefault();go(link.dataset.viewLink);}});window.addEventListener("hashchange",()=>go(location.hash.slice(1)||"home",false));
+$("#device-toggle").addEventListener("click",()=>{$("#app-shell").dataset.device=$("#app-shell").dataset.device==="mobile"?"fridge":"mobile";});if(window.matchMedia("(max-width:660px)").matches)$("#app-shell").dataset.device="mobile";
+const ntext=(n)=>`1인분 예시 · ${num(n.energy_kcal)}kcal · 단백질 ${num(n.protein_g)}g · 나트륨 ${num(n.sodium_mg)}mg`,picked=()=>state.result?.items.find((r)=>r.id===state.picked);
+function resetDraft(){portions={};portionKey="";savedDirect=false;}
+function home(){const root=view("home"),people=state.household.members.filter((m)=>state.selected.includes(m.id));$(".heading-row .eyebrow",root).textContent=`${api.today()} · ${meals[state.conditions.meal]} · 데모`;
+const list=clear($(".members",root));state.household.members.forEach((m,i)=>{const selected=state.selected.includes(m.id),b=btn("",async()=>{if(await call("selectMembers",selected?state.selected.filter((id)=>id!==m.id):[...state.selected,m.id])){resetDraft();render();}},"member");b.classList.toggle("selected",selected);b.setAttribute("aria-pressed",String(selected));b.append(el("span",m.name.slice(0,1),`avatar ${["peach","blue","yellow"][i%3]}`),el("span",m.name),el("i","✓"));list.append(b);});
+clear($(".strategy-note",root),el("span","✦"),el("p",people.length?people.map((m)=>`${m.name}: ${m.goal}`).join(" · "):"참여자를 한 명 이상 선택해 주세요."));
+const first=state.inventory.filter((i)=>i.confirmed&&i.grams>0).sort((a,b)=>(a.useBy||"9999").localeCompare(b.useBy||"9999"))[0],banner=$(".priority-banner",root);$("h2",banner).textContent=first?`${first.name} 재고를 확인해 보세요`:"새 재료를 등록해 보세요";$("p",banner).textContent=first?`${first.grams}g · 기록된 소비기한 ${first.useBy||"미입력"}. 날짜만으로 식품 안전을 보장하지 않습니다.`:"냉장고에서 입고·등록 데모를 진행할 수 있습니다.";$(".chip",banner).textContent="예시 재고";
+const report=api.report({memberId:state.selected[0]??null,days:1});$(".priority-action > span",root).textContent=`오늘 기록 ${report.records.length}건`;$(".home-grid .card:nth-child(2) h2",root).textContent=`${people[0]?.name||"가족"}의 오늘 기록`;
+const targets={protein_g:60,vegetable_g:350,sodium_mg:2000};$$('.balance > div',root).forEach((row,i)=>{const key=["protein_g","vegetable_g","sodium_mg"][i];$("strong",row).textContent=`${num(report.totals[key])} / ${targets[key]}${key==="sodium_mg"?"mg":"g"}`;$("i b",row).style.setProperty("--v",`${Math.min(100,report.totals[key]/targets[key]*100)}%`);});$(".home-grid .card:nth-child(2) .data-note",root).textContent="데모 기록 합계·예시 목표입니다. 실제 개인별 건강 목표 계산이 아닙니다.";
+clear($(".prompt-list",root),btn("재고로 메뉴 찾기",()=>go("recommend")),btn("이미 먹은 식사 기록",directRecord),btn("냉장고 재료 확인",()=>go("inventory")));$(".quick-ask p",root).textContent="직접 입력하거나 음성 발화 예시로 흐름을 확인하세요.";}
+function conditions(){const root=clear($("#recommendation-controls")),method=field("메뉴 조건",{value:state.conditions.method,options:[["balance","AI 균형 추천 · 데모"],["concept","오늘의 컨셉"]]}),time=field("조리 시간",{value:state.conditions.time,options:[[15,"15분 이내"],[20,"20분 이내"],[30,"30분 이내"],[60,"60분 이내"]]}),taste=field("먹고 싶은 맛",{value:state.conditions.taste,options:["모두","담백","고소"]}),meal=field("식사",{value:state.conditions.meal,options:Object.entries(meals)}),purchase=check("부족한 재료 구매 가능");purchase.input.checked=state.conditions.purchase;
+[method,time,taste,meal,purchase].forEach((f)=>{root.append(f.node);f.input.addEventListener("change",async()=>{if(await call("setConditions",{method:method.input.value,time:Number(time.input.value),taste:taste.input.value,meal:meal.input.value,purchase:purchase.input.checked})){resetDraft();render();await recommend();}});});root.append(btn("음성 조건 예시",()=>voice("추천 조건 발화 예시",["20분 안에 담백한 메뉴","고소한 메뉴 30분"],applyVoiceConditions)));}
+async function applyVoiceConditions(text){const match=text.match(/(\d+)분/);if(await call("setConditions",{method:"concept",time:match?Number(match[1]):30,taste:text.includes("고소")?"고소":text.includes("담백")?"담백":"모두"})){closeDialog();render();go("recommend");}}
+async function recommend(more=false){if(busy)return;const status=$("#recommendation-status");status.textContent="조건을 확인하는 중입니다…";status.dataset.state="loading";$(".recommend-layout",view("recommend")).hidden=true;$("#refresh-recipes").disabled=true;const result=await call("recommend",{more,scenario});$("#refresh-recipes").disabled=false;if(result){recommendation();recipe();}else{status.textContent="추천하지 못했습니다. 참여자와 진행 중인 조리를 확인해 주세요.";status.dataset.state="api_error";}}
+function recommendation(){conditions();const root=view("recommend"),result=state.result,status=$("#recommendation-status"),layout=$(".recommend-layout",root),people=state.household.members.filter((m)=>state.selected.includes(m.id));$(".subcopy",root).textContent=`${people.map((m)=>m.name).join(", ")||"참여자 미선택"} · 예시 재고 · 외부 AI 호출 없음`;
+clear($(".filters",root),el("span",`${people.length}인 · ${state.conditions.time}분`,"pill"),el("span",`다음 목표: ${state.nextGoal}`,"pill"),btn("다시 추천",()=>recommend(),"text-button"));layout.hidden=!result||result.status!=="recommendations_available";status.textContent=result?.message||"참여자와 조건을 선택해 주세요.";status.dataset.state=result?.status||"neutral";if(["api_error","stale_unvalidated"].includes(result?.status))status.append(btn("재시도",()=>recommend(),"text-button"));
+const list=clear($(".recipe-list",root)),panel=clear($(".reason-card",root));if(!result||result.status!=="recommendations_available")return;
+result.items.forEach((r,index)=>{const b=btn("",async()=>{if(await call("pickRecipe",r.id)){recommendation();recipe();}},"recipe-option");b.setAttribute("aria-pressed",String(state.picked===r.id));b.classList.toggle("selected",state.picked===r.id);const art=el("div",undefined,`food ${r.visual}`);art.append(el("i"),el("b"));const copy=el("div"),rank=el("p",undefined,"match");rank.append(el("span",String(index+1)),el("span","조건 맞춤 후보 · 데모"));copy.append(rank,el("h2",r.name),el("p",`단백질 ${num(r.nutrition.protein_g)}g · ${r.taste}`),el("small",`${r.minutes}분 · ${r.ingredients.length}가지 재료 · 확인 필요`));b.append(art,copy,el("b","›","chevron"));list.append(b);});
+const r=picked()||result.items[0],reasons=el("ul");r.reasons.forEach((text)=>{const li=el("li","✓");li.append(el("p",text));reasons.append(li);});panel.append(el("p","추천 근거 · 예시","eyebrow"),el("h2",r.name),reasons,el("div",ntext(r.nutrition),"nutrition-strip"),el("p",`data_quality: ${r.data_quality} · 확인 필요. ${r.warnings.join(" ")}`,"scenario-warning"),btn("레시피 보기",async()=>{if(await call("pickRecipe",r.id)){render();go("recipe");}},"primary wide"));if(result.excluded.length){const detail=el("details");detail.append(el("summary","제외된 후보 보기"));result.excluded.forEach((x)=>detail.append(note(`${x.name}: ${x.reason}`)));panel.append(detail);}}
+function recipe(){const root=view("recipe"),r=picked();if(!r){$(".recipe-hero h1",root).textContent="메뉴를 먼저 선택해 주세요";$(".recipe-hero .primary",root).disabled=true;$(".recipe-columns",root).hidden=true;return;}$(".recipe-hero .primary",root).disabled=false;$(".recipe-columns",root).hidden=false;$(".recipe-top .chip",root).textContent="데모 · 확인 필요";$(".recipe-hero h1",root).textContent=r.name;$(".recipe-hero .subcopy",root).textContent="참여 인원에 맞춘 분량 초안입니다. 실제 제품·조리 조건을 확인해 주세요.";$(".hero-food",root).className=`hero-food ${r.visual}`;
+const stats=clear($(".stats",root));[[r.minutes,"분"],[state.selected.length,"인분"],[`${num(r.nutrition.protein_g)}g`,"1인분 단백질 예시"]].forEach(([v,t])=>{const span=el("span",t);span.prepend(el("b",String(v)));stats.append(span);});const items=clear($(".ingredients ul",root));r.ingredients.forEach((i)=>{const li=el("li",ingredient(i.id).name);li.append(el("b",`${num(i.grams*state.selected.length/r.servings)}g`));items.append(li);});$(".ingredients .pill",root).textContent=`${state.selected.length}인분`;
+const personal=clear($(".personal",root)),confirm=check("데모 데이터이며 실제 재료·제외 조건 확인이 필요함을 확인했어요");personal.append(el("p","조리 전 확인","eyebrow"),el("h2","재료와 분량을 확인해 주세요"),note(ntext(r.nutrition)),note("구매 가능으로 찾은 메뉴도 실제 재고를 등록한 뒤 시작해야 합니다."),...r.warnings.map(note),confirm.node);const start=$(".recipe-hero .primary",root);start.removeAttribute("data-view-link");start.onclick=async()=>{if(await call("startCooking",confirm.input.checked)){recordMode="cooked";resetDraft();render();go("cook");}};const change=$(".ingredients .text-button",root);change.textContent="조리 시작 후 분량 변경 →";change.onclick=()=>notify("확인 항목을 체크하고 조리를 시작하면 재료를 변경할 수 있습니다.");}
 
-if (window.matchMedia("(max-width: 660px)").matches) {
-  shell.dataset.device = "mobile";
-}
+function cook(){const root=view("cook"),c=state.cooking;if(!c){$(".cook-heading h1",root).textContent="조리할 메뉴를 선택해 주세요";$(".instruction",root).textContent="레시피 확인 후 시작할 수 있습니다.";return;}
+$(".cook-heading .eyebrow",root).textContent=`${c.status==="completed"?"기록 완료":"조리 중"} · ${c.step+1}/${c.recipe.steps.length}단계 · ${c.people.map((p)=>p.name).join(", ")}`;$(".cook-heading h1",root).textContent=c.recipe.name;$(".instruction",root).textContent=c.recipe.steps[c.step];$(".progress i",root).style.width=`${(c.step+1)/c.recipe.steps.length*100}%`;
+const prev=btn("← 이전",async()=>{if(await call("step",-1))cook();}),next=btn("다음 단계 →",async()=>{if(await call("step",1))cook();},"primary");prev.disabled=c.step===0||c.status!=="active";next.disabled=c.step===c.recipe.steps.length-1||c.status!=="active";clear($(".step-buttons",root),prev,next);
+const changes=clear($("#changed-items"),el("b","실제 사용 재료 · 전체 g 기준"));c.ingredients.forEach((i)=>changes.append(el("p",`${ingredient(i.id).name} ${num(i.grams)}g`)));changes.append(note(ntext(c.nutrition)));c.changes.forEach((x)=>changes.append(el("p",`${x.name}: ${x.before}g → ${x.after}g`)));const edit=btn("재료·분량 변경",()=>changeDialog());edit.disabled=c.status!=="active";changes.append(edit,note("기본 조리법은 참고용입니다. 변경한 제품의 조리 안내도 확인하세요."));
+$("#listening-state").textContent=c.status==="active"?"대기 중":"기록 완료";$("#cook-question").disabled=c.status!=="active";$("#cook-chat-form button[type=submit]").disabled=c.status!=="active";
+const finish=$(".finish",root);finish.removeAttribute("data-view-link");finish.textContent=c.status==="completed"?"저장된 식사 기록 보기":"조리 완료 · 변경사항 한 번 확인";finish.onclick=()=>c.status==="completed"?go("report"):reviewDialog();
+const close=$(".cook-heading .close",root);close.removeAttribute("data-view-link");close.onclick=()=>{if(c.status!=="active")go("home");else dialog("조리를 취소할까요?",(body)=>body.append(note("이 조리의 변경사항은 저장되지 않고 재고도 차감하지 않습니다."),btn("조리 취소",async()=>{if(await call("cancelCooking")){closeDialog();render();go("home");}},"primary")));};}
+function changeDialog(prefill={}){if(state.cooking?.status!=="active"){notify("먼저 조리를 시작해 주세요.");return;}dialog("사용 재료·분량 변경",(body)=>{const form=el("form"),item=field("재료",{value:prefill.ingredient||state.cooking.ingredients[0].id,options:catalog.map((i)=>[i.id,i.name])}),amount=field("전체 사용량 (g) · 0은 제거",{type:"number",value:prefill.grams??state.cooking.ingredients.find((i)=>i.id===item.input.value)?.grams??0,min:0,max:10000,step:.1,required:true});item.input.addEventListener("change",()=>amount.input.value=state.cooking.ingredients.find((i)=>i.id===item.input.value)?.grams??0);const submit=el("button","변경안 확인·반영","primary");submit.type="submit";form.append(item.node,amount.node,note("‘반 모·한 통’은 자동 환산하지 않습니다. 실제 중량을 입력하세요."),submit);form.addEventListener("submit",async(e)=>{e.preventDefault();if(await call("changeIngredient",item.input.value,amount.input.value)){closeDialog();render();notify("변경된 재료로 예시 영양값을 다시 계산했습니다.");}});body.append(form);});}
+function reviewDialog(){if(state.cooking?.status!=="active"){notify("진행 중인 조리가 없습니다.");return;}dialog("조리 완료 · 변경사항을 한 번 확인해 주세요",(body)=>{const c=state.cooking;body.append(note(`${c.recipe.name} · ${c.servings}인분 · ${c.people.map((p)=>p.name).join(", ")}`));c.ingredients.forEach((i)=>body.append(el("p",`${ingredient(i.id).name} ${num(i.grams)}g`)));const confirm=check("실제 사용량이 맞아요. 섭취량을 확인할게요");body.append(confirm.node,btn("추가 변경",()=>changeDialog()),btn("확인하고 섭취 기록",async()=>{if(!confirm.input.checked){error(new Error("변경사항을 확인해 주세요."));return;}if(await call("reviewCooking")){recordMode="cooked";recordMethod="manual";portionKey="";closeDialog();render();go("record");}},"primary"));});}
+function directRecord(){if(state.cooking?.status==="active"){notify("진행 중인 조리를 마치거나 취소해 주세요.");go("cook");return;}if(!state.selected.length){notify("오늘 화면에서 참여자를 선택해 주세요.");go("home");return;}recordMode="direct";recordMethod="manual";portionKey="";savedDirect=false;record();go("record");}
+function record(){const root=view("record"),c=state.cooking,direct=recordMode==="direct",r=direct?api.recipes().find((r)=>r.id===directRecipe):c?.recipe,people=direct?state.household.members.filter((m)=>state.selected.includes(m.id)):c?.people||[],controls=clear($("#record-controls"));controls.append(note("시나리오 4 · 직접 입력 / 음성 발화 예시 / 사진 직접 확인. 실제 인식 모델은 호출하지 않습니다."));
+if(direct){const choice=field("이미 먹은 메뉴 · 예시 목록",{value:directRecipe,options:api.recipes().map((r)=>[r.id,r.name])});choice.input.addEventListener("change",()=>{directRecipe=Number(choice.input.value);portionKey="";savedDirect=false;record();});controls.append(choice.node,note("이미 먹은 식사는 재고를 차감하지 않습니다."));}
+const key=direct?`direct-${directRecipe}-${state.selected.join("-")}`:String(c?.id);if(key!==portionKey){portions=Object.fromEntries(people.map((p)=>[p.id,p.usual]));portionKey=key;}
+const voiceRecord=()=>voice("섭취량 발화 예시",[...people.map((p)=>`${p.name} 0.5인분`),`${people[0]?.name||"하늘"} 안 먹었어`],async(text)=>{const p=people.find((m)=>text.includes(m.name)),match=text.match(/(\d+(?:\.\d+)?)\s*인분/);if(!p||(!match&&!text.includes("안 먹"))){error(new Error("예: ‘하늘 0.5인분’ 또는 ‘지아 안 먹었어’로 입력해 주세요."));return;}const qty=text.includes("안 먹")?0:Number(match[1]);if(!Number.isFinite(qty)||qty>3){error(new Error("0~3인분으로 확인해 주세요."));return;}portions[p.id]=qty;recordMethod="voice_demo";closeDialog();record();});
+const actions=el("div",undefined,"scenario-actions");actions.append(btn("직접 입력",()=>{recordMethod="manual";notify("구성원별 섭취량을 직접 입력하세요.");record();}),btn("음성 발화 예시",voiceRecord),btn("사진 입력",photoDialog));controls.append(actions);
+const card=$(".record-card",root),completed=!direct&&c?.status==="completed";if(!r||!people.length||(!direct&&!c.reviewed)){card.hidden=true;controls.append(note("조리 완료를 확인하거나 오늘 화면에서 ‘이미 먹은 식사 기록’을 선택하세요."));return;}card.hidden=false;$(".meal h2",root).textContent=r.name;$(".meal p",root).textContent=completed||savedDirect?"저장 완료 · 중복 저장 불가":`기본 섭취량 초안 · ${people.length}명 · 예외만 수정해 주세요`;
+const change=$(".meal .text-button",root);change.removeAttribute("data-view-link");change.textContent=direct?"참여자 선택 →":"조리 내용 확인 →";change.onclick=()=>go(direct?"home":"cook");
+const per=direct?Object.fromEntries(["energy_kcal","protein_g","carbohydrate_g","fat_g","sodium_mg","vegetable_g"].map((n)=>[n,r.ingredients.reduce((sum,i)=>sum+ingredient(i.id)[n]*i.grams/100,0)/r.servings])):c.nutrition,list=clear($(".portion",root));people.forEach((p)=>{const row=el("div"),qty=field(`${p.name} 섭취량 (인분)`,{type:"number",value:portions[p.id]??0,min:0,max:3,step:.25,required:true}),value=el("small",`단백질 ${num(per.protein_g*(Number(portions[p.id])||0))}g · 예시`);qty.input.disabled=completed||savedDirect;qty.input.addEventListener("input",()=>{portions[p.id]=qty.input.value;value.textContent=`단백질 ${num(per.protein_g*(Number(qty.input.value)||0))}g · 예시`;});row.append(el("span",p.name.slice(0,1),"avatar peach"),el("b",p.name),qty.node,value);list.append(row);});
+const footer=clear($(".record-card footer",root)),confirm=check("실제 섭취량과 데모 영양정보를 확인했어요");confirm.input.disabled=completed||savedDirect;const save=btn(completed||savedDirect?"저장 완료":"식사 기록 저장",async()=>{if(await call("saveRecord",{portions:people.map((p)=>({memberId:p.id,servings:portions[p.id]})),confirmed:confirm.input.checked,directRecipeId:direct?directRecipe:null,method:recordMethod})){savedDirect=direct;render();notify("이 탭에 데모 식사 기록을 저장했습니다.");go("report");}},"primary");save.disabled=completed||savedDirect;footer.append(note(`입력: ${recordMethod} · ${direct?"개인별 인분 확인":`조리한 ${c.servings}인분 이내로 확인`}. 건강 목표로 섭취량을 임의 조정하지 않습니다.`),confirm.node,save);}
+function photoDialog(){dialog("식사 사진 · 인식 연동 전 데모",(body)=>{const file=field("사진 선택 (10MB 이하 JPEG·PNG·WebP)",{type:"file"}),preview=el("img"),confirm=check("사진 분석값이 아닌 직접 확인한 메뉴·양을 입력할게요");file.input.accept="image/jpeg,image/png,image/webp";preview.hidden=true;preview.className="scenario-photo";body.append(file.node,preview,note("사진은 브라우저에서만 미리 봅니다. 업로드·AI 분석·양 추정을 하지 않습니다."),confirm.node,btn("직접 확인으로 계속",()=>{if(!file.input.files?.length||!confirm.input.checked){error(new Error("사진과 확인 항목을 확인해 주세요."));return;}recordMethod="photo_manual";closeDialog();record();},"primary"));file.input.addEventListener("change",()=>{const selected=file.input.files?.[0];preview.hidden=true;if(photoURL)URL.revokeObjectURL(photoURL);photoURL=null;if(!selected)return;if(!["image/jpeg","image/png","image/webp"].includes(selected.type)||selected.size>10*1024*1024){file.input.value="";error(new Error("10MB 이하 JPEG·PNG·WebP를 선택하세요."));return;}photoURL=URL.createObjectURL(selected);preview.src=photoURL;preview.alt="식사 사진 미리보기";preview.hidden=false;});});}
+function inventory(){const root=view("inventory"),list=clear($("#inventory-list"));state.inventory.forEach((i)=>{const card=el("article",undefined,"inventory-item"),copy=el("div");copy.append(el("h2",i.name),el("p",`${num(i.grams)}g · ${i.location}`));const label=!i.confirmed?"임시 · 영양 미확인":i.useBy&&i.useBy<api.today()?"기한 경과 · 추천 제외":i.grams===0?"사용 완료":"예시 · 상태 확인";card.append(el("div","◌","inventory-icon"),copy,el("span",label,`chip ${!i.confirmed?"soon":"neutral"}`),btn("›",()=>inventoryDetails(i),"inventory-detail"));list.append(card);});const summary=$(".inventory-summary",root);$(".chip",summary).textContent=`${state.inventory.filter((i)=>i.grams>0).length}개 항목`;$("p",summary).textContent=`데모 갱신 ${new Date(state.inventoryUpdated).toLocaleTimeString("ko-KR")} · 실제 동기화 아님`;$(".subcopy",root).textContent="시나리오 5 · 확인된 재료와 임시 등록을 구분해 가족 공통 재고에 반영합니다.";clear($("#recognition-controls"),btn("입고 인식 데모",recognitionDialog,"primary"),note("카메라·YOLO 미연결. 확실/불확실/미매칭 후보를 확인 후 반영합니다."));}
+function inventoryDetails(item){const root=clear($("#nutrition-card"));root.hidden=false;const data=ingredient(item.ingredient);root.append(btn("×",()=>root.hidden=true,"drawer-close"),el("p","재료 상세 · 데모","eyebrow"),el("h2",item.name),el("p",`${item.grams}g · 소비기한 ${item.useBy||"미입력"}`,"nutrition-values"),note(data?`100g당 예시: ${data.energy_kcal}kcal · 단백질 ${data.protein_g}g · 나트륨 ${data.sodium_mg}mg. 실제 제품과 다를 수 있습니다.`:"기준 DB 미매칭 · 영양 계산·자동 추천 제외"),btn("이름·중량 수정",()=>{root.hidden=true;inventoryForm(item);},"primary"));}
+function inventoryForm(existing=null,candidate=null){dialog(existing?"재고 수정":"입고 정보 확인·등록",(body)=>{const form=el("form"),name=field("재료 이름",{value:existing?.name||candidate?.name||"",required:true,maxLength:60}),grams=field("확인한 실제 중량 (g)",{type:"number",value:existing?.grams??candidate?.grams??"",min:existing?0:.1,max:100000,step:.1,required:true}),location=field("보관 위치",{value:existing?.location||"냉장실",options:["냉장실","냉동실","실온"]}),date=field("표시 소비기한 (선택)",{type:"date",value:existing?.useBy||""}),confirm=check("이름·중량을 확인했어요. 미매칭 재료는 임시 등록됩니다");const submit=el("button","확인 후 재고 반영","primary");submit.type="submit";form.append(name.node,grams.node,location.node,date.node,note("‘한 봉지’는 자동 환산하지 않습니다. 제품 라벨이나 측정값을 확인하세요. 이름·중량 확인은 식품 안전 보증이 아닙니다."),confirm.node,submit);if(candidate&&!candidate.matched)form.prepend(note("기준 식품 미매칭 · 사용자 표현으로 임시 등록할 수 있습니다."));form.addEventListener("submit",async(e)=>{e.preventDefault();if(!confirm.input.checked){error(new Error("확인 항목을 체크해 주세요."));return;}if(await call("saveInventory",{uid:existing?.uid??null,name:name.input.value,grams:grams.input.value,location:location.input.value,useBy:date.input.value,confirmed:true})){closeDialog();render();notify("데모 재고에 반영했습니다.");}});body.append(form);});}
+function recognitionDialog(){dialog("입고 인식 · 예시 선택",(body)=>{body.append(note("새 재료를 넣은 상황입니다. 실제 카메라·센서는 호출하지 않습니다."));[["matched","확실 · 당근 200g"],["uncertain","불확실 · 재료·중량 확인"],["unknown","DB 미매칭 · 임시 등록"]].forEach(([kind,label])=>body.append(btn(label,async()=>{const candidate=await call("recognition",kind);if(candidate)inventoryForm(null,candidate);},"outline wide")));});}
 
-async function requestJson(url, options = {}) {
-  const response = await fetch(url, options);
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "요청을 처리하지 못했습니다.");
-  return data;
-}
-
-function notify(message) {
-  toast.textContent = message;
-  toast.classList.add("visible");
-  clearTimeout(notify.timer);
-  notify.timer = setTimeout(() => toast.classList.remove("visible"), 2400);
-}
-
-function openView(name) {
-  if (!document.querySelector(`[data-view="${name}"]`)) return;
-  views.forEach((view) => view.classList.toggle("active", view.dataset.view === name));
-  navigation.forEach((item) => item.classList.toggle("active", item.dataset.viewLink === name));
-  document.querySelector(".content").scrollTo({ top: 0, behavior: "smooth" });
-  history.replaceState(null, "", `#${name}`);
-}
-
-navigation.forEach((item) => item.addEventListener("click", () => openView(item.dataset.viewLink)));
-
-document.querySelector("#device-toggle").addEventListener("click", () => {
-  const mobile = shell.dataset.device !== "mobile";
-  shell.dataset.device = mobile ? "mobile" : "fridge";
-  notify(mobile ? "ThinQ 앱 화면으로 전환했어요." : "냉장고 화면으로 전환했어요.");
-});
-
-document.querySelectorAll(".member").forEach((button) => {
-  button.addEventListener("click", () => {
-    button.classList.toggle("selected");
-    const names = [...document.querySelectorAll(".member.selected")].map((item) => item.dataset.member);
-    notify(`${names.join(", ")}의 식사 기준을 반영해요.`);
-  });
-});
-
-document.querySelectorAll(".filters button").forEach((button) => button.addEventListener("click", () => button.classList.toggle("active")));
-
-document.querySelectorAll(".recipe-option").forEach((option) => {
-  option.addEventListener("click", () => {
-    document.querySelectorAll(".recipe-option").forEach((item) => item.classList.toggle("selected", item === option));
-    document.querySelector("#selected-recipe-title").textContent = option.dataset.recipe;
-  });
-});
-
-document.querySelectorAll("[data-question]").forEach((button) => {
-  button.addEventListener("click", () => {
-    openView("cook");
-    const input = document.querySelector("#cook-question");
-    input.value = button.dataset.question;
-    input.focus();
-  });
-});
-
-function getUrgency(item) {
-  if (item.name === "떡") return ["냉동 보관", "calm"];
-  if (item.name === "버섯") return ["2일 안에 활용", "soon"];
-  if (item.name === "달걀") return ["여유 있음", "calm"];
-  return [item.use_by || "상태 확인", "neutral"];
-}
-
-function renderInventory(inventory) {
-  inventoryList.replaceChildren();
-  const items = [{ name: "시금치", quantity: 200, unit: "g", location: "냉장실", priority: true }, ...(inventory.items || [])];
-  items.forEach((item) => {
-    const [label, state] = item.priority ? ["오늘 활용", "urgent"] : getUrgency(item);
-    const card = document.createElement("article");
-    card.className = "inventory-item";
-    card.innerHTML = `<div class="inventory-icon ${item.priority ? "leaf" : ""}">${item.priority ? "✽" : "◌"}</div><div><h2>${item.name}</h2><p>${item.quantity}${item.unit} · ${item.location}</p></div><span class="chip ${state}">${label}</span><button class="inventory-detail" type="button" aria-label="${item.name} 영양성분 보기">›</button>`;
-    card.querySelector(".inventory-detail").addEventListener("click", () => loadNutrition(item.name));
-    inventoryList.append(card);
-  });
-}
-
-async function loadInventory() {
-  try {
-    renderInventory(await requestJson("/api/inventory"));
-  } catch (error) {
-    inventoryList.innerHTML = `<p class="error-message">재고를 불러오지 못했습니다. ${error.message}</p>`;
-  }
-}
-
-async function loadNutrition(foodName) {
-  nutritionCard.hidden = false;
-  nutritionCard.innerHTML = `<p>${foodName}의 영양성분을 불러오는 중입니다.</p>`;
-  try {
-    const nutrition = await requestJson(`/api/nutrition?food_name=${encodeURIComponent(foodName)}`);
-    nutritionCard.innerHTML = `<button class="drawer-close" type="button" aria-label="닫기">×</button><p class="eyebrow">영양성분</p><h2>${nutrition.food_name} <small>${nutrition.serving_size}</small></h2><p class="nutrition-values">열량 ${nutrition.energy_kcal ?? "-"}kcal · 탄수화물 ${nutrition.carbohydrate_g ?? "-"}g · 단백질 ${nutrition.protein_g ?? "-"}g · 지방 ${nutrition.fat_g ?? "-"}g · 나트륨 ${nutrition.sodium_mg ?? "-"}mg</p><p class="data-note">${nutrition.match_note || "공용 영양 DB 기준"}</p>`;
-  } catch (error) {
-    nutritionCard.innerHTML = `<button class="drawer-close" type="button" aria-label="닫기">×</button><p>${foodName}의 영양성분을 아직 확인하지 못했습니다.</p><p class="data-note">${error.message}</p>`;
-  }
-  nutritionCard.querySelector(".drawer-close").addEventListener("click", () => { nutritionCard.hidden = true; });
-}
-
-document.querySelector("#refresh-inventory").addEventListener("click", () => { loadInventory(); notify("재고를 새로 확인했어요."); });
-document.querySelector("#add-inventory").addEventListener("click", () => notify("카메라 인식 또는 음성 등록 화면을 연결할 수 있어요."));
-document.querySelector("#refresh-recipes").addEventListener("click", () => notify("현재 재료와 기준으로 메뉴를 다시 비교했어요."));
-document.querySelector("#quick-voice").addEventListener("click", () => notify("음성으로 오늘 저녁을 물어볼 수 있어요."));
-document.querySelector("#next-step").addEventListener("click", () => notify("다음 조리 단계로 이동합니다."));
-
-document.querySelector("#cook-voice").addEventListener("click", () => {
-  const state = document.querySelector("#listening-state");
-  state.textContent = state.textContent === "듣는 중" ? "대기 중" : "듣는 중";
-});
-
-document.querySelector("#cook-chat-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const input = document.querySelector("#cook-question");
-  const question = input.value.trim();
-  if (!question) return;
-  const answer = document.querySelector("#cook-answer");
-  answer.innerHTML = "<p>재료와 조리 기준을 확인하는 중이에요.</p>";
-  try {
-    const data = await requestJson("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
-    answer.innerHTML = `<p>${data.answer}</p><small>검증된 재고 정보 기준</small>`;
-    if (/반 모|적게|줄일게|빼/.test(question)) {
-      document.querySelector("#changed-items").innerHTML = "<b>변경된 재료</b><p><strong>두부</strong> · 원본 200g → 확인이 필요한 변경 초안</p>";
-    }
-  } catch (error) {
-    answer.innerHTML = `<p>답변을 만들지 못했습니다.</p><small>${error.message}</small>`;
-  }
-  input.value = "";
-});
-
-const initial = location.hash.slice(1);
-if (initial) openView(initial);
-loadInventory();
+function profile(){const root=view("profile"),grid=clear($(".profile-grid",root)),family=el("section",undefined,"card"),people=el("section",undefined,"card");family.append(el("p","가족 공동 프로필","eyebrow"),el("h2",state.household.name),note(`공통 원칙: ${state.household.principle}`),note(state.household.configured?"설정 확인 완료 · 이 탭에서만 유지":"예시 가족입니다. 최소 설정 또는 전체 설정으로 변경할 수 있습니다."),btn("초기 설정 시작",setupDialog,"primary"));people.append(el("p","구성원별 합성 데이터","eyebrow"));state.household.members.forEach((m)=>{const row=el("div",undefined,"scenario-log");row.append(el("b",m.name),el("p",`${m.goal} · 기본 ${m.usual}인분 · 제외 ${m.excluded.join(", ")||"미설정"}`));if(m.diabetesStatus==="yes"||m.mealPrecautions)row.append(note("개인 건강상 주의사항 등록됨 · 상세 내용은 프로필 수정에서 확인"));people.append(row);});people.append(note("실제 계정 인증·암호화 저장·건강검진 연동은 구현하지 않았습니다. 민감정보를 입력하지 마세요."));grid.append(family,people);$("#household-settings").textContent=`${state.household.name}⌄`;}
+function setupDialog(){dialog("시나리오 1 · 초기 설정",(body)=>{body.append(note("실제 인증·계정 연결을 하지 않는 데모입니다. 입력은 이 탭에서만 유지됩니다."),btn("기존 예시 가족 불러오기",async()=>{if(await call("loadExampleHousehold")){closeDialog();resetDraft();render();go("home");}},"primary wide"),btn("새 가족 · 최소 설정",()=>profileForm(false,true),"outline wide"),btn("새 가족 · 전체 설정",()=>profileForm(true,true),"outline wide"),btn("현재 가족 수정",()=>profileForm(true,false),"outline wide"),btn("초대 코드 참여 · 데모",inviteDialog,"outline wide"));});}
+function inviteDialog(){dialog("예시 가족 초대",(body)=>{const code=field("데모 초대 코드",{value:"DEMO",maxLength:20});body.append(note("실제 계정에 연결하지 않습니다. DEMO 코드로 예시 가족을 불러옵니다."),code.node,btn("참여 확인",async()=>{if(code.input.value.trim()!=="DEMO"){error(new Error("데모 코드는 DEMO입니다."));return;}if(await call("loadExampleHousehold")){closeDialog();resetDraft();render();go("home");}},"primary"));});}
+function profileForm(full,isNew,draft=null){const data=draft||{name:isNew?"":state.household.name,principle:isNew?"재고 우선":state.household.principle,members:isNew?[{name:"",goal:"영양 균형",usual:1,excluded:[]}]:state.household.members};dialog(full?"가족 전체 설정":"최소 설정 · 상세 정보는 나중에",(body)=>{const form=el("form"),name=field("가족 이름",{value:data.name,required:true,maxLength:40}),principle=field("공통 식사 원칙",{value:data.principle,options:["재고 우선","영양 균형","간편 조리"]}),rows=el("div"),inputs=[];
+function addMember(member={name:"",goal:"영양 균형",usual:1,excluded:[]}){if(inputs.filter((r)=>r.active).length>=8){error(new Error("최대 8명까지 설정할 수 있습니다."));return;}const row=el("fieldset"),label=field("이름·별칭",{value:member.name,required:true,maxLength:20}),goal=field("관심 목표",{value:member.goal,options:goals}),usual=field("평소 식사량 (인분)",{type:"number",value:member.usual,min:.25,max:3,step:.25,required:full}),excluded=field("제외 재료 (쉼표 구분·예시만)",{value:member.excluded.join(", "),maxLength:150}),diabetes=field("당뇨 여부 (선택 · 예시만 입력)",{value:member.diabetesStatus||"unspecified",options:Object.entries(diabetesLabels)}),precautions=field("사용자가 설정한 식사 주의사항 (선택 · 200자 이내)",{value:member.mealPrecautions||"",maxLength:200}),entry={active:true,label,goal,usual,excluded,diabetes,precautions};inputs.push(entry);row.append(el("legend","가족 구성원"),label.node);if(full)row.append(goal.node,usual.node,excluded.node,diabetes.node,precautions.node,note("개인 건강정보입니다. 현재는 탭 메모리의 데모이며, 입력한 병명으로 메뉴 적합성이나 섭취량을 판단하지 않습니다. 실제 건강정보는 입력하지 마세요."));row.append(btn("구성원 제거",()=>{entry.active=false;row.remove();}));rows.append(row);}
+data.members.forEach(addMember);const submit=el("button","입력 정보 확인","primary");submit.type="submit";form.append(name.node);if(full)form.append(principle.node);form.append(rows,btn("다른 구성원 추가",()=>addMember()),note("실제 민감정보는 입력하지 마세요. 최소 설정에서는 이름 외 항목을 예시 기본값으로 시작합니다."),submit);
+form.addEventListener("submit",(e)=>{e.preventDefault();const proposed={name:name.input.value,principle:principle.input.value,members:inputs.filter((r)=>r.active).map((r)=>({name:r.label.input.value,goal:r.goal.input.value,usual:full?Number(r.usual.input.value):1,excluded:full?r.excluded.input.value.split(",").map((s)=>s.trim()).filter(Boolean):[],diabetesStatus:full?r.diabetes.input.value:"unspecified",mealPrecautions:full?r.precautions.input.value:""}))};if(!proposed.members.length){error(new Error("구성원을 한 명 이상 입력해 주세요."));return;}dialog("가족 설정 확인",(body)=>{body.append(el("h3",proposed.name),note(proposed.principle));proposed.members.forEach((m)=>{body.append(el("p",`${m.name} · ${m.goal} · ${m.usual}인분 · 제외 ${m.excluded.join(", ")||"없음"}`),note(`당뇨 여부: ${diabetesLabels[m.diabetesStatus]} · 식사 주의사항: ${m.mealPrecautions||"미입력"}`));});body.append(btn("수정할게요",()=>profileForm(full,isNew,proposed)),btn("맞아요 · 식생활 관리 시작",async()=>{if(await call("saveHousehold",proposed)){closeDialog();resetDraft();render();go("home");}},"primary"));});});body.append(form);});}
+function report(){const root=view("report");if(reportMember!==null&&!state.household.members.some((m)=>m.id===reportMember))reportMember=state.household.members[0]?.id??null;const data=api.report({memberId:reportMember,days:reportDays}),controls=clear($("#report-controls")),who=field("리포트 대상",{value:reportMember??"family",options:[["family","가족 전체"],...state.household.members.map((m)=>[m.id,m.name])]}),period=field("기간",{value:reportDays,options:[[1,"오늘"],[7,"최근 7일"]]});who.input.addEventListener("change",()=>{reportMember=who.input.value==="family"?null:Number(who.input.value);report();});period.input.addEventListener("change",()=>{reportDays=Number(period.input.value);report();});controls.append(who.node,period.node);
+$(".heading-row h1",root).textContent=`${reportMember===null?"우리 가족":state.household.members.find((m)=>m.id===reportMember)?.name}의 식사 기록`;$(".subcopy",root).textContent="시나리오 6 · 이 탭의 데모 기록만 집계합니다. 과거 기록을 만들어 채우지 않습니다.";const segmented=clear($(".segmented",root),btn("개인",()=>{reportMember=state.household.members[0].id;report();}),btn("가족",()=>{reportMember=null;report();}));segmented.children[reportMember===null?1:0].classList.add("active");
+const hero=$(".report-hero",root);$(".chip",hero).textContent="데모 기록 합계";$("h2",hero).textContent=data.count?`${data.count}건의 개인 섭취 기록이 있어요`:"아직 저장된 식사 기록이 없어요";$("p",hero).textContent=data.count?`열량 ${num(data.totals.energy_kcal)}kcal · 단백질 ${num(data.totals.protein_g)}g · 나트륨 ${num(data.totals.sodium_mg)}mg. 예시 영양값이며 건강 판단에 사용하지 않습니다.`:"식사를 기록하면 직접 입력한 섭취량 기준으로 예시 영양 합계를 표시합니다.";clear($(".ring",hero),el("b",String(data.records.length)),el("span","식사 기록"));
+const chart=clear($(".chart",root)),labels=clear($(".chart-label",root)),max=Math.max(1,...data.daily.map((d)=>d.protein_g));data.daily.forEach((d)=>{const bar=el("i");bar.style.setProperty("--h",`${d.protein_g/max*100}%`);bar.title=`${d.date}: 단백질 ${num(d.protein_g)}g`;bar.setAttribute("aria-label",bar.title);chart.append(bar);labels.append(el("span",d.date.slice(5)));});$(".report-grid .card .card-title h2",root).textContent="기록된 단백질 추이 · g";$(".report-grid .card .pill",root).textContent=`${reportDays}일`;
+const insight=clear($(".insight",root)),goal=field("다음 기간 관리 목표",{value:state.nextGoal,options:goals});insight.append(el("p","다음 식사로 이어가기","eyebrow"),el("h2",data.count?"식사 기록을 확인하고 다음 목표를 선택하세요":"식사 기록부터 시작해 보세요"),goal.node,btn("목표 반영",async()=>{if(await call("setNextGoal",goal.input.value)){render();notify("다음 추천 설명에 반영했습니다. 실제 건강·추천 점수 정책을 변경하지 않습니다.");}},"primary"),btn("메뉴 추천 보기",()=>go("recommend"),"text-button"));
+let extra=$("#report-extra");if(!extra){extra=el("div");extra.id="report-extra";root.append(extra);}clear(extra);const log=el("section",undefined,"card scenario-section");log.append(el("h2","식사 기록 내역"));if(!data.records.length)log.append(note("선택한 기간에 기록이 없습니다."));data.records.slice().reverse().forEach((r)=>{const row=el("div",undefined,"scenario-log");row.append(el("b",`${r.date} · ${r.name}`),note(r.portions.filter((p)=>reportMember===null||p.memberId===reportMember).map((p)=>`${r.people.find((m)=>m.id===p.memberId)?.name} ${p.servings}인분`).join(" · ")),note(`입력: ${r.method} · ${r.direct?"이미 먹은 식사":"조리 변경 반영"} · demo_data`));log.append(row);});const close=btn(state.closedDays.includes(api.today())?"오늘 기록 마감 완료":"오늘 식사 기록 마감",async()=>{if(await call("closeDay")){report();notify("마감 상태를 기록했습니다. 이후 추가 기록도 가능합니다.");}});close.disabled=state.closedDays.includes(api.today());log.append(close);extra.append(log,supplements());}
+function supplements(){const panel=el("section",undefined,"card scenario-section");panel.append(el("h2","직접 설정한 일반 보조식품 일정"),note("시각·체크 상태만 관리합니다. 복용량·효능·처방을 추천하지 않고 브라우저 밖 알림을 보내지 않습니다."),btn("일정 추가",()=>dialog("일반 보조식품 일정 · 데모",(body)=>{const name=field("일정 이름 (예시만)",{required:true,maxLength:40}),time=field("안내 시각",{type:"time",value:"09:00",required:true});body.append(name.node,time.node,btn("일정 저장",async()=>{if(await call("addSupplement",{name:name.input.value,time:time.input.value})){closeDialog();report();}},"primary"));})));if(!state.supplements.length)panel.append(note("등록한 일정이 없습니다."));state.supplements.forEach((s)=>{const done=s.takenDates.includes(api.today()),row=el("div",undefined,"scenario-log"),b=btn(`${s.time} ${s.name} · ${done?"오늘 체크 완료":"오늘 미체크"}`,async()=>{if(await call("toggleSupplement",s.id))report();});b.setAttribute("aria-pressed",String(done));row.append(b);panel.append(row);});return panel;}
+function voice(title,examples,onUse){dialog(title,(body)=>{body.append(note("녹음·STT를 호출하지 않는 발화 예시입니다. 예시를 선택하거나 직접 입력하세요."));const input=el("textarea");input.rows=3;input.maxLength=500;input.setAttribute("aria-label","발화 예시 입력");examples.forEach((text)=>body.append(btn(text,()=>input.value=text)));body.append(input,btn("입력 내용 확인",()=>onUse(input.value),"primary"));});}
+function tools(){dialog("데모 상태·초기화",(body)=>{const mode=field("다음 추천 응답",{value:scenario,options:[["success","정상"],["api_error","AI 연결 오류"],["privacy_blocked","개인정보 차단"],["no_safe_recommendation","추천 불가"],["stale_unvalidated","오래된 결과"]]});body.append(mode.node,btn("상태 적용",()=>{scenario=mode.input.value;closeDialog();notify("다음 추천 요청에 적용합니다. 정상으로 바꾸면 복구할 수 있습니다.");},"primary"),note("초기화는 이 탭의 가족·재고·조리·기록·일정을 처음으로 되돌립니다. 외부 DB에 접근하지 않습니다."),btn("데모 처음부터",()=>dialog("데모 데이터를 초기화할까요?",(body)=>body.append(note("이 탭의 예시 기록이 사라집니다."),btn("초기화",async()=>{if(await call("reset")){scenario="success";reportMember=1;recordMode="cooked";resetDraft();closeDialog();render();go("home");}},"primary")))));});}
+$("#edit-profile").addEventListener("click",setupDialog);$("#household-settings").addEventListener("click",setupDialog);$("#demo-tools").addEventListener("click",tools);$("#notice-button").addEventListener("click",()=>{go("report");$("#report-extra").scrollIntoView({behavior:"smooth"});});$("#refresh-recipes").textContent="같은 조건으로 더 보기";$("#refresh-recipes").addEventListener("click",()=>recommend(true));$("#refresh-inventory").addEventListener("click",()=>{inventory();notify("현재 탭의 예시 재고를 다시 표시했습니다.");});$("#add-inventory").addEventListener("click",()=>inventoryForm());$("#quick-voice").addEventListener("click",()=>voice("오늘 식사 조건 · 발화 예시",["20분 안에 담백한 메뉴","고소한 메뉴 30분"],applyVoiceConditions));
+async function ask(text){const result=await call("ask",text);if(!result)return;clear($("#cook-answer"),el("p",result.answer),el("small","데모 응답 · 외부 AI 미사용"));if(result.intent==="change")changeDialog(result);else if(result.intent==="complete")reviewDialog();}
+$("#cook-chat-form").addEventListener("submit",async(e)=>{e.preventDefault();const input=$("#cook-question");await ask(input.value);input.value="";});$("#cook-voice").addEventListener("click",()=>voice("조리 중 발화 예시",["두부 100g만 넣을게","버섯 빼줘","조리 끝났어"],async(text)=>{closeDialog();await ask(text);}));
+function render(){state=api.read();home();recommendation();recipe();cook();record();inventory();profile();report();}
+render();go(location.hash.slice(1)||"home",false);
+})();
