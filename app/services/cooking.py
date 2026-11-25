@@ -90,6 +90,8 @@ def change(db, session_id, obj):
 
 def complete(db, session_id, obj):
     datetime.fromisoformat(obj.eaten_at.replace('Z','+00:00'))
+    # Serialize stock checks and session completion across concurrent requests.
+    db.execute('BEGIN IMMEDIATE')
     session=state(db,session_id)
     if session['status']!='active': raise ValueError('이미 완료된 조리 세션입니다.')
     participants={r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=?',(session['meal_session_id'],))}
@@ -98,10 +100,27 @@ def complete(db, session_id, obj):
         person=members(db,session['household_id'],[item.member_id])[0]
         for constraint in person['constraints']:
             if constraint['kind']=='meal_sodium_max_mg' and session['nutrition_per_serving']['sodium_mg']*item.servings>float(constraint['value']): raise ValueError('개인 섭취량이 나트륨 제한을 초과합니다.')
+    for ingredient in session['ingredients']:
+        remaining=ingredient['quantity_g']
+        rows=db.execute('''SELECT * FROM inventory_items WHERE household_id=? AND ingredient_id=?
+            ORDER BY CASE WHEN use_by IS NULL THEN 1 ELSE 0 END, use_by, id''',
+            (session['household_id'],ingredient['ingredient_id'])).fetchall()
+        for row in rows:
+            stock=dict(row)
+            if not assess_inventory(stock)['usable'] or stock['quantity_g'] is None or stock['quantity_g'] <= 0:
+                continue
+            used=min(remaining,stock['quantity_g'])
+            left=stock['quantity_g']-used
+            # Persist the remaining quantity in grams so both quantity fields agree.
+            db.execute("UPDATE inventory_items SET quantity_g=?,quantity=?,unit='g' WHERE id=?",(left,left,stock['id']))
+            remaining-=used
+            if remaining <= 1e-9: break
+        if remaining > 1e-9: raise ValueError('확인된 재고가 부족합니다.')
     cur=db.execute('INSERT INTO meal_records(session_id,recipe_id,eaten_at) VALUES (?,?,?)',(session['meal_session_id'],session['recipe_id'],obj.eaten_at))
     for item in obj.items:
         rec=db.execute('INSERT INTO meal_record_items(record_id,member_id,servings) VALUES (?,?,?)',(cur.lastrowid,item.member_id,item.servings))
         db.executemany('INSERT INTO nutrition_intakes VALUES (?,?,?)',[(rec.lastrowid,n,round(v*item.servings,2)) for n,v in session['nutrition_per_serving'].items()])
+        if item.servings == 0: continue
         for ingredient in session['ingredients']:
             name=db.execute('SELECT name FROM ingredients WHERE id=?',(ingredient['ingredient_id'],)).fetchone()[0]
             add_evidence(db,session['household_id'],item.member_id,'meal_record','ingredient',name,'prefer',observed_at=obj.eaten_at)
