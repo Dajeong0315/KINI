@@ -4,6 +4,9 @@
 팀 저장소: https://github.com/Dajeong0315/KINI
 시작 기준: main `5d80dc2`. 이 문서는 이번 브랜치의 코드·원격 DB 작업·문서와 남은 통합을 정리한다.
 공유 브랜치: `codex/a-data-platform-specs`.
+전달 경로: 팀 저장소에 대한 현재 계정의 push 권한이 없어, 팀 저장소의 기존 fork인
+`brian180099/KINI`에 같은 이름의 새 브랜치를 올리고 `Dajeong0315/KINI:main` 대상 draft PR로 전달한다.
+팀 origin과 기존 fork main은 변경하지 않는다. 새 브랜치의 시작 기준은 팀 main이다.
 main 병합 전 상태이며 실제 서비스 완료 선언이 아니다.
 
 ## 1. 확정된 방향
