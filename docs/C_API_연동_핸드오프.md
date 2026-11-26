@@ -156,3 +156,12 @@ week는 KST 오늘 포함 최근 7일이다. 영양 합계는 저장된 실제 �
 누락 영양 null은 미확인으로 표시하고 0과 구분한다. `known_nutrition_totals`는 확인된 부분 합계다.
 이력의 `records/items`, 리포트의 `daily/members`, `units`, 품질·페이지 필드는 `PostgreSQL_식사이력_영양리포트_검증.md`를 따른다.
 완료 후 서버 이력/리포트를 재조회하되 화면에서 재고를 또 차감하지 않는다. 직접 POST meal-records는 PostgreSQL에서 계속 501이다.
+
+## 2026-11-26 추가: PostgreSQL 재료 선택·중량 확인
+
+`codex/postgres-ingredient-tools` 이후 `GET /api/ingredients/search?q=...`, `POST /api/inventory/normalize`가 PostgreSQL에서도 지원된다.
+기존 응답 이름은 유지한다. PostgreSQL에서는 두 호출 모두 기존 가구 Bearer를 전달하며 viewer 읽기도 가능하다.
+현재 addInventory의 normalize 호출은 request 헬퍼의 세 번째 인자에 `true` 전달이 필요하다(`request(path, body, true)`). 이 서버 작업에서는 C 파일을 수정하지 않았다.
+환산 근거가 있어도 실제 상품 확인 경고가 있으면 requires_confirmation=true다. 미등록·복수 일치·ml/L·근거 없는 개수는 임의 확정하지 않는다.
+서버가 재료·중량을 반환한 것은 재고 변경이 아니다. 경고 확인 후 기존 A 이벤트 생성/확정 흐름을 사용한다.
+자세한 단위·상태·검증 계약은 `PostgreSQL_재료검색_단위변환_검증.md`를 따른다.

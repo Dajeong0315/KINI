@@ -1,6 +1,6 @@
 param(
     [string]$Python = "python",
-    [string[]]$TestPaths = @('tests/test_postgres_inventory_concurrency.py', 'tests/test_postgres_integration.py', 'tests/test_vision_postgres_http.py', 'tests/test_family_postgres_http.py', 'tests/test_recommendation_read_postgres.py', 'tests/test_recommendation_rules_postgres.py', 'tests/test_recommendation_http_postgres.py', 'tests/test_cooking_postgres_http.py', 'tests/test_cooking_completion_postgres.py', 'tests/test_meal_reporting_postgres.py')
+    [string[]]$TestPaths = @('tests/test_postgres_inventory_concurrency.py', 'tests/test_postgres_integration.py', 'tests/test_vision_postgres_http.py', 'tests/test_family_postgres_http.py', 'tests/test_recommendation_read_postgres.py', 'tests/test_recommendation_rules_postgres.py', 'tests/test_recommendation_http_postgres.py', 'tests/test_cooking_postgres_http.py', 'tests/test_cooking_completion_postgres.py', 'tests/test_meal_reporting_postgres.py', 'tests/test_ingredient_tools_postgres.py')
 )
 
 $ErrorActionPreference = "Stop"

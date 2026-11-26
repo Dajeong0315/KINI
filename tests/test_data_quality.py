@@ -62,6 +62,16 @@ def test_ingredient_specific_conversion_requires_evidence(db):
     assert convert_quantity(db,1,'컵',1)['quantity_g']==200
     assert convert_quantity(db,1,'컵',2)['quantity_g'] is None
 
+
+def test_conflicting_conversion_evidence_requires_manual_mass(db):
+    db.executemany("INSERT INTO unit_conversions(ingredient_id,from_unit,to_unit,factor,confidence,source_type) VALUES (1,'컵','g',?,.99,'verified_product')",[(200,),(250,)])
+    assert convert_quantity(db,1,'컵',1)['quantity_g'] is None
+
+
+def test_conversion_overflow_does_not_return_infinite_grams(db):
+    db.execute("INSERT INTO unit_conversions(ingredient_id,from_unit,to_unit,factor,confidence,source_type) VALUES (1,'컵','g',1e308,.99,'verified_product')")
+    assert convert_quantity(db,2,'컵',1)['quantity_g'] is None
+
 def test_inventory_api(monkeypatch,tmp_path):
     monkeypatch.setenv('KINI_DB_PATH',str(tmp_path/'api.sqlite3'))
     from app.main import app
