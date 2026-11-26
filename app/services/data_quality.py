@@ -21,9 +21,10 @@ def inspect_ingredient(db, ingredient_id, people, inventory, nutrition_provider=
             MAX(CASE WHEN v.nutrient_code='fat_g' THEN v.amount END) fat_g,
             MAX(CASE WHEN v.nutrient_code='sodium_mg' THEN v.amount END) sodium_mg
             FROM ingredient_official_food_mappings m JOIN official_food_items f ON f.id=m.official_food_item_id
+            JOIN dataset_releases r ON r.id=f.release_id AND r.status='published'
             LEFT JOIN official_nutrient_values v ON v.official_food_item_id=f.id
-            WHERE m.ingredient_id=? AND m.active=1 AND f.release_id=?
-            GROUP BY f.id ORDER BY m.approved_at DESC LIMIT 1''',(ingredient_id,pointer['nutrition_release_id'])).fetchone()
+            WHERE m.ingredient_id=? AND m.active=1 AND f.active=1 AND f.release_id=?
+            GROUP BY f.id ORDER BY MAX(m.approved_at) DESC,f.id LIMIT 1''',(ingredient_id,pointer['nutrition_release_id'])).fetchone()
     if official:
         item=dict(item); item.update(dict(official)); item['nutrition_source']='official_imported'; item['nutrition_confidence']=1.0
     if nutrition_provider is not None:

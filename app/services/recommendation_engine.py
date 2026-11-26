@@ -1,9 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import json
 import hashlib
 import math
-from datetime import date
-from .recommendation_repository import members
+from datetime import date, timedelta
+from .recommendation_repository import members, recipe_candidates, recipe_ingredient_rows
 from .personalization import aggregate, score_personalization
 from .freshness import assess_inventory
 from .recommendation_llm import PROMPT_VERSION
@@ -33,7 +33,7 @@ def recommend(db, req, *, persist=True):
         consumed={r['nutrient']:r['total'] for r in db.execute('SELECT nutrient,SUM(amount) total FROM nutrition_intakes JOIN meal_record_items ON meal_record_items.id=record_item_id JOIN meal_records ON meal_records.id=record_id WHERE member_id=? AND substr(eaten_at,1,10)=? GROUP BY nutrient',(p['id'],today))}
         remaining[p['id']]={n:round(max(0,v-consumed.get(n,0)),2) for n,v in p['targets'].items()}
     candidates=[]; excluded=[]
-    for recipe_row in db.execute('SELECT * FROM recipes ORDER BY id'):
+    for recipe_row in recipe_candidates(db):
         recipe=dict(recipe_row)
         if recipe['id'] in req.get('excluded_recipe_ids', []):
             excluded.append({'recipe_id':recipe['id'],'name':recipe['name'],'reasons':['이전에 표시한 메뉴 제외']})
@@ -41,7 +41,7 @@ def recommend(db, req, *, persist=True):
         if not recipe['servings'] or recipe['servings']<=0:
             excluded.append({'recipe_id':recipe['id'],'name':recipe['name'],'reasons':['인분 확인 필요'],'reason_codes':['unit_confirmation_required']})
             continue
-        ingredients=[dict(r) for r in db.execute('SELECT ri.quantity_g,i.id,i.name,i.category,n.energy_kcal,n.protein_g,n.carbohydrate_g,n.fat_g,n.sodium_mg FROM recipe_ingredients ri JOIN ingredients i ON i.id=ri.ingredient_id LEFT JOIN ingredient_nutrition n ON n.ingredient_id=i.id WHERE recipe_id=? ORDER BY i.id',(recipe['id'],))]
+        ingredients=recipe_ingredient_rows(db, recipe['id'])
         reasons=[]; reason_codes=[]; warnings=[]; qualities=[]; usage=[]; missing=0; urgency=0
         for item in ingredients:
             name=item['name']; matching=[x for x in inventory if x['ingredient_id']==item['id']]
@@ -51,7 +51,7 @@ def recommend(db, req, *, persist=True):
             if codes: reasons.extend({'allergen_conflict':f'{name}: 알레르기','label_confirmation_required':f'{name}: 성분표 확인 필요','nutrition_unknown':f'{name}: 영양 정보 부족','ingredient_unknown':f'{name}: 재료 정보 부족'}.get(code,code) for code in codes)
             if item['quantity_g'] is None or not math.isfinite(item['quantity_g']) or item['quantity_g'] <= 0:
                 reasons.append(f'{name}: 중량 확인 필요'); reason_codes.append('unit_confirmation_required'); continue
-            guideline_row=db.execute('SELECT * FROM ingredient_storage_guidelines WHERE ingredient_id=? ORDER BY rowid DESC LIMIT 1',(item['id'],)).fetchone()
+            guideline_row=db.execute('SELECT * FROM ingredient_storage_guidelines WHERE ingredient_id=? ORDER BY ingredient_id,guideline,unopened_days,opened_days,frozen_days,recommended_storage DESC LIMIT 1',(item['id'],)).fetchone()
             guideline=dict(guideline_row) if guideline_row else None
             assessed=[(x, assess_inventory(x, date.fromisoformat(today), guideline)) for x in matching]
             safe=[x for x,assessment in assessed if assessment['usable']]
@@ -83,7 +83,7 @@ def recommend(db, req, *, persist=True):
         pref=max(0,100-20*sum(any(x['name']==v['value'] or (v['value']=='매운 음식' and recipe['spicy']) for x in ingredients) for p in people for v in p['preferences'] if v['kind']=='dislike'))
         if req.get('desired_menu'):
             pref = min(100, pref + 20) if req['desired_menu'] in recipe['name'] else max(0, pref - 20)
-        recent=db.execute('SELECT COUNT(*) FROM meal_records WHERE recipe_id=? AND substr(eaten_at,1,10)>=date(?,\'-7 days\')',(recipe['id'],today)).fetchone()[0]
+        recent=db.execute('SELECT COUNT(*) FROM meal_records r JOIN meal_sessions s ON s.id=r.session_id WHERE s.household_id=? AND r.recipe_id=? AND substr(r.eaten_at,1,10)>=?',(req['household_id'],recipe['id'],(date.fromisoformat(today)-timedelta(days=7)).isoformat())).fetchone()[0]
         variety=100 if not recent else 30
         imminent=any(x['priority']==1 for x in usage)
         weights=(.30,.15,.25,.10,.08,.07,.05) if imminent else (.15,.15,.30,.15,.10,.10,.05)
@@ -100,7 +100,7 @@ def recommend(db, req, *, persist=True):
     for candidate in candidates:
         for adjustment in candidate['adjustments']:
             adjustment['meal_target_estimate']={n:round(v/3,2) for n,v in adjustment['remaining_targets'].items()}
-    snapshot = {'request':req,'as_of':today,'participants':people,'inventory':inventory,'recipes':[dict(r) for r in db.execute('SELECT * FROM recipes ORDER BY id')], 'recipe_ingredients':[dict(r) for r in db.execute('SELECT * FROM recipe_ingredients ORDER BY recipe_id,ingredient_id')], 'nutrition':[dict(r) for r in db.execute('SELECT * FROM ingredient_nutrition ORDER BY ingredient_id')], 'storage_guidelines':[dict(r) for r in db.execute('SELECT * FROM ingredient_storage_guidelines ORDER BY rowid')], 'remaining':remaining, 'excluded':excluded, 'scores':[(c['recipe_id'],c['scores'],c['personalization_score']) for c in candidates]}
+    snapshot = {'request':req,'as_of':today,'participants':people,'inventory':inventory,'recipes':[dict(r) for r in db.execute('SELECT * FROM recipes ORDER BY id')], 'recipe_ingredients':[dict(r) for r in db.execute('SELECT * FROM recipe_ingredients ORDER BY recipe_id,ingredient_id')], 'nutrition':[dict(r) for r in db.execute('SELECT * FROM ingredient_nutrition ORDER BY ingredient_id')], 'storage_guidelines':[dict(r) for r in db.execute('SELECT * FROM ingredient_storage_guidelines ORDER BY ingredient_id,guideline,unopened_days,opened_days,frozen_days,recommended_storage')], 'remaining':remaining, 'excluded':excluded, 'scores':[(c['recipe_id'],c['scores'],c['personalization_score']) for c in candidates]}
     snapshot['ingredients']=[dict(r) for r in db.execute('SELECT * FROM ingredients ORDER BY id')]
     snapshot['allergen_tags']=[dict(r) for r in db.execute('SELECT * FROM ingredient_allergen_tags ORDER BY ingredient_id,allergen_code')]
     snapshot['allergen_aliases']=[dict(r) for r in db.execute('SELECT * FROM allergen_aliases ORDER BY alias')]
@@ -112,7 +112,7 @@ def recommend(db, req, *, persist=True):
     validated_constraint_codes=[]
     for raw_ingredient in req.get('excluded_ingredients',[]):
         if not isinstance(raw_ingredient,str): continue
-        row=db.execute('SELECT id FROM ingredients WHERE name=? AND active=1',(raw_ingredient,)).fetchone()
+        row=db.execute('SELECT id FROM ingredients WHERE name=? AND active=TRUE',(raw_ingredient,)).fetchone()
         if row: validated_constraint_codes.append(f'exclude_ingredient:ingredient_{row[0]}')
     if candidates: validated_constraint_codes.append('nutrition:locally_validated')
     result={'rules_version':RULES_VERSION,'prompt_version':PROMPT_VERSION,'db_version':db.execute("SELECT value FROM metadata WHERE key='db_version'").fetchone()[0], 'input_snapshot_hash':fingerprint, 'participant_ids':ids,'profile_snapshot':people,'inventory_snapshot':inventory,'recommendations':candidates[:3],'excluded':excluded,'as_of':today,'nutrition_data_release_id':nutrition_release_id,'allergen_reference_version_id':allergen_reference_version_id,'data_provenance_summary':provenance,'validated_constraint_codes':sorted(set(validated_constraint_codes))}

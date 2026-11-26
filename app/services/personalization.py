@@ -3,6 +3,21 @@ from datetime import datetime, timezone
 import json
 import math
 
+
+
+def member_match(db):
+    return 'member_id IS NOT DISTINCT FROM ?' if getattr(db, 'is_postgres', False) else 'member_id IS ?'
+
+
+def date_window(db, column, days):
+    if getattr(db, 'is_postgres', False):
+        return f'CAST({column} AS DATE) BETWEEN CAST(? AS DATE)-{days} AND CAST(? AS DATE)'
+    return f"date({column}) BETWEEN date(?,'-{days} days') AND date(?)"
+
+
+def expiry_after(db):
+    return 'CAST(expires_at AS DATE)>CAST(? AS DATE)' if getattr(db, 'is_postgres', False) else 'date(expires_at)>date(?)'
+
 FEATURES = {'ingredient', 'recipe', 'cuisine', 'cooking_method', 'taste', 'cook_time', 'meal_type'}
 
 
@@ -36,7 +51,7 @@ def aggregate(db, household_id, now=None):
     for row in existing:
         db.execute("UPDATE inferred_preferences SET status='expired' WHERE id=?", (row['id'],))
     for (member_id, feature, value), entries in sorted(groups.items(), key=lambda x: (x[0][0] or 0, x[0][1], x[0][2])):
-        previous = db.execute('SELECT id,status FROM inferred_preferences WHERE household_id=? AND member_id IS ? AND feature_type=? AND feature_value=?', (household_id, member_id, feature, value)).fetchone()
+        previous = db.execute(f'SELECT id,status FROM inferred_preferences WHERE household_id=? AND {member_match(db)} AND feature_type=? AND feature_value=?', (household_id, member_id, feature, value)).fetchone()
         if previous and previous['status'] == 'dismissed': continue
         net = sum(w * (1 if r['signal'] == 'prefer' else -1 if r['signal'] == 'avoid' else 0) for r, w in entries)
         total = sum(w for _, w in entries)
@@ -88,15 +103,15 @@ def score_personalization(db, household_id, people, recipe, ingredients, today):
             ignored.append(signal); continue
         adjustment = r['score_adjustment'] * (1 if r['inference'] == 'prefer' else -1)
         signal['adjustment'] = adjustment; applied.append(signal); score += adjustment
-    recent = [r for r in db.execute("SELECT f.member_id FROM recommendation_feedback f JOIN recommendation_requests q ON q.id=f.recommendation_request_id WHERE q.household_id=? AND f.candidate_recipe_id=? AND f.action='selected' AND date(f.created_at) BETWEEN date(?,'-7 days') AND date(?)", (household_id, recipe['id'], today, today)) if r['member_id'] is None or r['member_id'] in ids]
+    recent = [r for r in db.execute(f"SELECT f.member_id FROM recommendation_feedback f JOIN recommendation_requests q ON q.id=f.recommendation_request_id WHERE q.household_id=? AND f.candidate_recipe_id=? AND f.action='selected' AND {date_window(db, 'f.created_at', 7)}", (household_id, recipe['id'], today, today)) if r['member_id'] is None or r['member_id'] in ids]
     if recent:
         adjustment = -min(3, len(recent)); score += adjustment
         applied.append({'feature_type':'recipe', 'feature_value':str(recipe['id']), 'inference':'recent_repeat', 'adjustment':adjustment})
     recent_adjustments = {}
-    for row in db.execute("SELECT member_id,feature_type,feature_value,signal,source_type FROM preference_evidence WHERE household_id=? AND date(observed_at) BETWEEN date(?,'-30 days') AND date(?) AND (expires_at IS NULL OR date(expires_at)>date(?)) ORDER BY id", (household_id,today,today,today)):
+    for row in db.execute(f"SELECT member_id,feature_type,feature_value,signal,source_type FROM preference_evidence WHERE household_id=? AND {date_window(db, 'observed_at', 30)} AND (expires_at IS NULL OR {expiry_after(db)}) ORDER BY id", (household_id,today,today,today)):
         if row['member_id'] is not None and row['member_id'] not in ids: continue
         if (row['feature_type'],row['feature_value']) not in features: continue
-        status = db.execute('SELECT status FROM inferred_preferences WHERE household_id=? AND member_id IS ? AND feature_type=? AND feature_value=?', (household_id,row['member_id'],row['feature_type'],row['feature_value'])).fetchone()
+        status = db.execute(f'SELECT status FROM inferred_preferences WHERE household_id=? AND {member_match(db)} AND feature_type=? AND feature_value=?', (household_id,row['member_id'],row['feature_type'],row['feature_value'])).fetchone()
         if status and status['status'] == 'dismissed': continue
         if row['member_id'] is None and any((i,row['feature_type'],row['feature_value']) in personal for i in ids): continue
         if row['signal']=='prefer' and any(any(v['kind']=='dislike' and v['value']==row['feature_value'] for v in p['preferences']) for p in people if row['member_id'] is None or p['id']==row['member_id']): continue
