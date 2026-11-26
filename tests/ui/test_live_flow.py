@@ -1,6 +1,8 @@
-﻿"""Real local HTTP + Chrome E2E; AI/nutrition/chat are deterministic test doubles.
+"""Real local HTTP + Chrome E2E; AI/nutrition/chat are deterministic test doubles.
 Run: python -m pip install playwright; python -m pytest tests/ui/test_live_flow.py -q
 """
+from contextlib import closing
+import json
 from pathlib import Path
 from threading import Thread
 
@@ -15,6 +17,13 @@ def live(monkeypatch, tmp_path):
     import app.main as main
     from app.services.ai import recommendation_chain
     from app.services.ai.openai_client import FakeOpenAIRecommendationClient, OpenAIClientError
+    from app.services.local_identity import create_account
+    from app.services.recommendation_repository import open_db
+    with closing(open_db()) as db:
+        create_account(db, 'browser-owner', 'synthetic-browser-password', 1)
+        viewer = create_account(db, 'browser-viewer', 'synthetic-browser-password', 1)
+        with db:
+            db.execute("UPDATE account_households SET role='viewer' WHERE account_id=?", (viewer,))
     mode = {'error': False}
     class Fake:
         def explain(self, payload):
@@ -46,8 +55,16 @@ def browser_page():
         browser.close()
 
 
-def open_recommend(page, base):
-    page.goto(base)
+def sign_in(page, name='browser-owner', password='synthetic-browser-password'):
+    page.get_by_label('로그인 이름').fill(name)
+    page.get_by_label('비밀번호').fill(password)
+    page.get_by_role('button', name='로그인', exact=True).click()
+    page.locator('body[aria-busy=false]').wait_for()
+
+
+def open_recommend(page, base, name='browser-owner'):
+    page.goto(base + '/mobile')
+    sign_in(page, name)
     page.get_by_role('button', name='오늘의 메뉴 추천', exact=True).wait_for()
     members = page.request.get(base + '/api/members?household_id=1').json()['members']
     for m in members:
@@ -61,9 +78,11 @@ def request_recommend(page):
     page.locator('body[aria-busy=false]').wait_for()
 
 
-def test_real_api_cooking_and_saved_nutrition(live, browser_page):
+@pytest.mark.parametrize('width', [390, 1280])
+def test_real_api_cooking_and_saved_nutrition(live, browser_page, width):
     base, _ = live
     page = browser_page
+    page.set_viewport_size({'width': width, 'height': 960})
     open_recommend(page, base)
     request_recommend(page)
     assert page.locator('#recommendation-status').get_attribute('data-state') == 'recommendations_available'
@@ -87,13 +106,21 @@ def test_real_api_cooking_and_saved_nutrition(live, browser_page):
     page.get_by_role('button', name='조리 완료 · 섭취량 확인', exact=True).click()
     page.get_by_label('실제 섭취량 (인분)').fill('0.5')
     page.get_by_label('실제 사용량과 개인별 섭취량을 확인했습니다').check()
-    import json
     from app.services.recommendation_repository import open_db
     with open_db() as db:
         used=json.loads(db.execute("SELECT ingredients_json FROM cooking_sessions WHERE status='active'").fetchone()[0])
         stock_before={r['ingredient_id']:r['quantity_g'] for r in db.execute('SELECT ingredient_id,quantity_g FROM inventory_items')}
-    with page.expect_response(lambda r: r.url.endswith('/complete')) as saved:
+    # Check the A snapshot directly after applying the outflows and after B completes.
+    page.get_by_role('button', name='수동 출고량 확인', exact=True).click()
+    page.get_by_label('아직 출고하지 않은 재료이며 위 재고와 중량을 확인했습니다').check()
+    with page.expect_response(lambda r: r.url.endswith('/api/data/inventory')) as withdrawn:
+        page.get_by_role('button', name='수동 출고 확정', exact=True).click()
+    after_withdrawal = withdrawn.value.json()
+    page.get_by_label('실제 사용량과 개인별 섭취량을 확인했습니다').check()
+    with page.expect_response(lambda r: r.url.endswith('/api/data/inventory')) as refreshed, page.expect_response(lambda r: r.url.endswith('/complete')) as saved:
         page.get_by_role('button', name='서버에 식사 기록 저장', exact=True).click()
+    assert saved.value.status == 201
+    assert refreshed.value.json() == after_withdrawal
     saved_nutrition=saved.value.json()['nutrition_per_serving']
     page.get_by_role('heading', name='식사 기록 저장 확인', exact=True).wait_for()
     assert '기록 ID' in page.locator('[data-view=report]').inner_text()
@@ -110,6 +137,7 @@ def test_real_api_cooking_and_saved_nutrition(live, browser_page):
     Path('output/ui').mkdir(parents=True,exist_ok=True)
     page.screenshot(path='output/ui/live-mobile-record.png',full_page=True)
     page.reload()
+    sign_in(page)
     page.get_by_role('heading',name='식사 기록 저장 확인',exact=True).wait_for()
     assert '과거 기록이 없다는 의미는 아닙니다' in page.locator('[data-view=report]').inner_text()
 
@@ -184,7 +212,7 @@ def test_inventory_registration_uses_normalization_without_replacing_legacy_stoc
     page.get_by_label('등록할 정확한 재료명').fill('당근')
     page.get_by_label('측정 중량 (g)').fill('123')
     page.get_by_label('재료명·실제 중량을 확인했습니다').check()
-    page.get_by_role('button',name='SQLite 재고 등록',exact=True).click()
+    page.get_by_role('button',name='입고 확정',exact=True).click()
     page.locator('body[aria-busy=false]').wait_for()
     assert page.get_by_role('alert').count()==0
     from app.services.recommendation_repository import open_db
@@ -198,6 +226,7 @@ def test_explicit_surfaces_keep_mode_across_resize_refresh_and_switch(live,brows
     base,_=live;page=browser_page
     page.set_viewport_size({'width':1280,'height':960})
     page.goto(base+'/'+device)
+    sign_in(page)
     page.get_by_role('button',name='오늘의 메뉴 추천',exact=True).wait_for()
     assert page.locator('#app-shell').get_attribute('data-device')==device
     assert page.locator('[data-device-choice='+device+']').get_attribute('aria-pressed')=='true'
@@ -216,6 +245,8 @@ def test_explicit_surfaces_keep_mode_across_resize_refresh_and_switch(live,brows
     page.set_viewport_size({'width':390,'height':844})
     page.screenshot(path=f'output/ui/separate-{device}-narrow.png',full_page=True)
     page.reload()
+    page.get_by_role('heading', name='로컬 가구 로그인', exact=True).wait_for()
+    sign_in(page)
     page.get_by_role('button',name='오늘의 메뉴 추천',exact=True).wait_for()
     assert page.locator('#app-shell').get_attribute('data-device')==device
     # Switching layouts retains the in-memory household selection and active workflow.
@@ -230,7 +261,7 @@ def test_explicit_surfaces_keep_mode_across_resize_refresh_and_switch(live,brows
 
 
 
-def test_short_stock_rolls_back_and_preserves_intake_draft(live,browser_page):
+def test_short_stock_preflight_creates_no_events_and_preserves_intake_draft(live,browser_page):
     base,_=live;page=browser_page
     open_recommend(page,base);request_recommend(page)
     page.locator('.recipe-option').filter(has_text='두부').first.click()
@@ -242,11 +273,50 @@ def test_short_stock_rolls_back_and_preserves_intake_draft(live,browser_page):
         db.execute('UPDATE inventory_items SET quantity_g=1,quantity=1 WHERE ingredient_id=4')
         before=[tuple(r) for r in db.execute('SELECT id,quantity_g FROM inventory_items ORDER BY id')]
     page.get_by_label('실제 섭취량 (인분)').fill('0.5')
-    page.get_by_label('실제 사용량과 개인별 섭취량을 확인했습니다').check()
-    page.get_by_role('button',name='서버에 식사 기록 저장',exact=True).click()
-    page.get_by_role('alert').wait_for()
+    page.get_by_role('button',name='수동 출고량 확인',exact=True).click()
+    page.locator('[role=alert][data-http-status="409"]').wait_for()
     assert page.get_by_label('실제 섭취량 (인분)').input_value()=='0.5'
     with open_db() as db:
         assert db.execute('SELECT COUNT(*) FROM meal_records').fetchone()[0]==0
+        assert db.execute('SELECT COUNT(*) FROM inventory_events').fetchone()[0]==0
         assert [tuple(r) for r in db.execute('SELECT id,quantity_g FROM inventory_items ORDER BY id')]==before
         assert db.execute('SELECT status FROM cooking_sessions').fetchone()[0]=='active'
+
+
+def test_login_failure_and_completion_http_errors(live, browser_page):
+    base, _ = live
+    page = browser_page
+    page.goto(base + '/mobile')
+    sign_in(page, password='synthetic-invalid-password')
+    assert page.locator('[role=alert][data-http-status="401"]').is_visible()
+    assert page.get_by_label('비밀번호').input_value() == ''
+
+    open_recommend(page, base, 'browser-viewer')
+    request_recommend(page)
+    page.locator('.recipe-option').first.click()
+    page.get_by_label('실제 재료·분량 및 데이터 품질을 확인했습니다').check()
+    page.get_by_role('button', name='조리 시작', exact=True).click()
+    page.get_by_role('button', name='조리 완료 · 섭취량 확인', exact=True).click()
+    page.get_by_label('기존 확정 출고 ID (쉼표 구분)').fill('99999')
+
+    def save_with_error(status):
+        page.get_by_label('실제 사용량과 개인별 섭취량을 확인했습니다').check()
+        with page.expect_response(lambda r: r.url.endswith('/complete')) as saved:
+            page.get_by_role('button', name='서버에 식사 기록 저장', exact=True).click()
+        assert saved.value.status == status
+        page.locator(f'[role=alert][data-http-status="{status}"]').wait_for()
+
+    save_with_error(403)
+    page.get_by_role('button', name='다시 로그인', exact=True).click()
+    sign_in(page)
+    save_with_error(409)
+    assert '출고 확인 필요' in page.get_by_role('alert').inner_text()
+
+    def omit_header(route):
+        headers = {key: value for key, value in route.request.headers.items() if key.lower() != 'authorization'}
+        route.continue_(headers=headers)
+
+    page.route('**/complete', omit_header)
+    save_with_error(401)
+    page.get_by_role('heading', name='로컬 가구 로그인', exact=True).wait_for()
+    assert not page.evaluate('localStorage.length || sessionStorage.length')

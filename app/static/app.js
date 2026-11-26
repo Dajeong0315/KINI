@@ -6,12 +6,12 @@
   const views = [...document.querySelectorAll("[data-view]")];
   const intakeDraft = {};
   let busy = false,
-    ready = false,
     errorMessage = "",
+    errorStatus = 0,
     current = "home",
     lastAnswer = "",
-    inventoryError = "",
-    inventoryMessage = "";
+    inventoryMessage = "",
+    existingOutflows = "";
   const conditions = {
     meal_type: "dinner",
     cook_time_limit_minutes: 30,
@@ -112,6 +112,7 @@
     if (busy) return;
     busy = true;
     errorMessage = "";
+    errorStatus = 0;
     document.body.setAttribute("aria-busy", "true");
     const controls = [...document.querySelectorAll("button,input,select")];
     const disabled = controls.map((n) => n.disabled);
@@ -119,10 +120,13 @@
     try {
       await action();
     } catch (e) {
+      errorStatus = e.status || 0;
       errorMessage =
-        e.status === 409 && e.code === "inventory_confirmation_required"
-          ? "확정된 재료 출고 내역을 확인해야 저장할 수 있습니다. 재고 화면에서 확인 후 다시 시도해 주세요."
-          : e.message;
+        e.status === 403
+          ? "이 가구의 재고 출고 또는 조리 완료 권한을 확인해 주세요. 세션이 만료됐다면 다시 로그인해 주세요."
+          : e.status === 409 && e.code === "inventory_confirmation_required"
+            ? `출고 확인 필요 · ${e.message}`
+            : e.message;
     } finally {
       busy = false;
       controls.forEach((n, i) => (n.disabled = disabled[i]));
@@ -135,6 +139,50 @@
     history.replaceState(null, "", `#${current}`);
     render();
     window.scrollTo({ top: 0 });
+    if (name === "inventory" && s.session) run(() => api.inventory());
+  }
+  function loginView(root) {
+    heading(
+      root,
+      "로컬 가구 로그인",
+      "가구 계정으로 로그인해 식사와 재고를 확인하세요.",
+    );
+    const p = panel(root, "가구 계정"),
+      form = node("form");
+    const name = field("로그인 이름"),
+      password = field("비밀번호", { type: "password" });
+    const household = field("가구 ID", {
+      type: "number",
+      value: s.household?.id || 1,
+      min: 1,
+      step: 1,
+    });
+    name.input.autocomplete = "username";
+    password.input.autocomplete = "current-password";
+    name.input.required =
+      password.input.required =
+      household.input.required =
+        true;
+    household.input.readOnly = active();
+    const submit = button("로그인", () => {}, "primary");
+    submit.type = "submit";
+    form.append(name.wrap, password.wrap, household.wrap, submit);
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      run(async () => {
+        try {
+          await api.login(
+            name.input.value,
+            password.input.value,
+            Number(household.input.value),
+          );
+        } finally {
+          password.input.value = "";
+        }
+        await Promise.all([api.inventory(), api.refreshData()]);
+      });
+    };
+    p.append(form);
   }
   function selectedRecipe() {
     return s.result?.status === "recommendations_available"
@@ -208,22 +256,25 @@
     const stock = panel(dashboard, "냉장고 속 재료");
     stock.classList.add("stock-widget");
     stock.append(button("재고 보기", () => go("inventory"), "text-button"));
-    if (inventoryError)
-      stock.append(
-        note("재고 조회에 실패했습니다. 재고 화면에서 다시 확인해 주세요."),
-      );
-    const ingredients = s.legacyInventory?.items || [];
+    const ingredients =
+      s.inventory?.items.filter((item) => item.quantity_g > 0) || [];
     ingredients.slice(0, 3).forEach((i, index) => {
       const row = node("div", undefined, "stock-row");
       row.append(
         node("span", ["◒", "◌", "◐"][index], "ingredient-symbol"),
         node("b", i.name),
-        node("span", `${i.quantity} ${i.unit}`),
+        node("span", `${i.quantity_g} g`),
       );
       stock.append(row);
     });
-    if (!ingredients.length) stock.append(note("조회된 재고가 없습니다."));
-    stock.append(note("질문용 재고 기준 · 추천 재고와 다를 수 있습니다."));
+    if (!ingredients.length)
+      stock.append(
+        note(
+          s.inventory
+            ? "조회된 재고가 없습니다."
+            : "재고 화면에서 최신 수량을 확인해 주세요.",
+        ),
+      );
     const records = node("section", undefined, "meal-record-widget card");
     records.append(node("h2", "오늘의 식사 기록"));
     const row = node("div", undefined, "meal-status-row");
@@ -408,6 +459,7 @@
             confirm.input.checked,
             conditions,
           );
+          existingOutflows = "";
           current = "cook";
         }),
       "primary",
@@ -460,12 +512,17 @@
         e.preventDefault();
         run(() => api.changeIngredient(name.input.value, qty.input.value));
       };
-      p.append(
-        form,
-        note(
-          "완료 시 레시피 전체 사용량을 재고에 반영합니다. 레시피 분량 자동 조정·취소는 아직 지원하지 않습니다.",
-        ),
-      );
+      if (s.outflows?.started)
+        p.append(
+          note(
+            "출고를 시작해 재료 변경이 잠겼습니다. 섭취량 기록 화면에서 이어서 진행하세요.",
+          ),
+        );
+      else
+        p.append(
+          form,
+          note("최종 재료를 확인한 뒤 재고 출고와 섭취 기록으로 진행합니다."),
+        );
       const question = field("조리 질문"),
         answer = node("div", undefined, "ai-answer"),
         qform = node("form"),
@@ -513,6 +570,61 @@
       );
     nutrition(p, s.cooking.nutrition_per_serving);
     quality(p, s.cooking);
+    const stock = panel(root, "재료 출고 확인");
+    const batch = s.outflows;
+    if (!batch?.started) {
+      stock.append(
+        note(
+          "이미 확정된 출고가 있으면 아래 식사 기록에 ID를 입력하세요. 해당 재료를 다시 출고하지 마세요.",
+        ),
+      );
+      stock.append(
+        button("수동 출고량 확인", () =>
+          run(() => {
+            if (existingOutflows.trim())
+              throw Error("입력한 확정 출고 ID를 먼저 확인해 주세요.");
+            return api.prepareOutflows();
+          }),
+        ),
+      );
+    }
+    if (batch) {
+      const list = node("ul", undefined, "outflow-list");
+      for (const entry of batch.entries) {
+        list.append(
+          node(
+            "li",
+            `${entry.name} ${entry.body.quantity_g}g · 재고 #${entry.body.inventory_item_id} · ${entry.expiry || "기한 미기재"} · ${entry.applied ? `출고 확정 #${entry.eventId}` : "확정 전"}`,
+          ),
+        );
+      }
+      stock.append(list);
+      if (batch.entries.some((entry) => !entry.applied)) {
+        const confirmation = checkbox(
+          "아직 출고하지 않은 재료이며 위 재고와 중량을 확인했습니다",
+        );
+        stock.append(
+          confirmation.wrap,
+          button(
+            "수동 출고 확정",
+            () =>
+              run(async () => {
+                if (!confirmation.input.checked || existingOutflows.trim())
+                  throw Error(
+                    "출고할 재료와 중량, 기존 출고 여부를 확인해 주세요.",
+                  );
+                await api.confirmOutflows();
+                await api.inventory();
+              }),
+            "primary",
+          ),
+        );
+      } else
+        stock.append(
+          node("p", "출고가 재고에 반영됐습니다. 이제 섭취량을 저장하세요."),
+        );
+    }
+    const intake = panel(root, "구성원별 섭취량");
     const form = node("form"),
       entries = s.household.members
         .filter((m) => s.selected.includes(m.id))
@@ -533,6 +645,15 @@
       confirmed = checkbox("실제 사용량과 개인별 섭취량을 확인했습니다");
     const save = button("서버에 식사 기록 저장", () => {}, "primary");
     save.type = "submit";
+    if (!batch?.started) {
+      const ids = field("기존 확정 출고 ID (쉼표 구분)", {
+        value: existingOutflows,
+      });
+      ids.input.oninput = () => {
+        existingOutflows = ids.input.value;
+      };
+      form.append(ids.wrap);
+    }
     form.append(
       note(
         "먹지 않은 사람은 0인분으로 입력하세요. 서버에는 실제 식사한 사람만 전송합니다.",
@@ -549,20 +670,23 @@
             servings: Number(x.input.value || NaN),
           })),
           confirmed.input.checked,
+          !!batch?.started,
+          existingOutflows
+            .split(",")
+            .map((id) => id.trim())
+            .filter(Boolean)
+            .map((id) => (/^\d+$/.test(id) ? Number(id) : NaN)),
         );
         current = "report";
+        await api.inventory();
       });
     };
-    p.append(form);
+    intake.append(form);
   }
   function inventory(root) {
-    heading(
-      root,
-      "냉장고 재고",
-      "기존 JSON 재고와 추천용 SQLite 재고는 서로 동기화되지 않습니다.",
-    );
-    const p = panel(root, "기존 재고 조회 · /api/inventory");
-    p.append(button("재고 새로고침", () => run(loadInventory)));
+    heading(root, "냉장고 재고", "로그인한 가구의 재고입니다.");
+    const p = panel(root, "가구 재고 목록");
+    p.append(button("재고 새로고침", () => run(() => api.inventory())));
     p.append(
       button("재고에 대해 질문", () => {
         const body = $("#dialog-body");
@@ -580,43 +704,40 @@
             answer.textContent = (await api.chat(q.input.value)).answer;
           });
         };
-        body.append(form, answer);
+        body.append(
+          note("재고 질문 도우미는 별도의 예시 재고를 사용합니다."),
+          form,
+          answer,
+        );
         $("#scenario-dialog").showModal();
       }),
     );
-    if (inventoryError) p.append(note(inventoryError));
-    if (s.legacyInventory)
+    if (s.inventory)
       p.append(
-        note(`재고 원본 갱신일: ${s.legacyInventory.updated_at || "미제공"}`),
+        note(
+          `재고 버전 ${s.inventory.inventory_version} · 확인 대기 ${s.inventory.pending_event_count}건`,
+        ),
       );
-    for (const i of s.legacyInventory?.items || []) {
+    for (const i of s.inventory?.items || []) {
       const row = node("article", undefined, "inventory-item");
       row.append(
         node("h2", i.name),
         note(
-          `${i.quantity} ${i.unit} · ${i.location || "위치 미제공"} · 소비기한 ${i.use_by || "미입력"}`,
+          `${i.quantity_g == null ? "중량 미확인" : `${i.quantity_g}g`} · 소비기한 ${i.expiry_date || "미입력"} · ${i.data_status === "verified" ? "등록 확인" : "재료 정보 확인 필요"}`,
         ),
         button("영양 조회", () => showNutrition(i.name)),
       );
       p.append(row);
     }
-    if (!s.legacyInventory)
-      p.append(note("재고를 조회하지 못했습니다. 새로고침해 주세요."));
-    const sqlite = panel(root, "추천용 SQLite 재고");
+    if (!s.inventory) p.append(note("재고를 새로고침해 주세요."));
+    else if (!s.inventory.items.length)
+      p.append(note("등록된 재고가 없습니다."));
+    const sqlite = panel(root, "수동 입고");
     if (inventoryMessage) {
       const confirmation = note(inventoryMessage);
       confirmation.setAttribute("role", "status");
       sqlite.append(confirmation);
     }
-    sqlite.append(
-      note("독립 재고 목록 API가 없습니다. 마지막 추천 응답의 스냅샷입니다."),
-    );
-    for (const i of s.result?.inventory_snapshot || [])
-      sqlite.append(
-        note(
-          `${i.name}: ${i.quantity_g ?? "미확인"}g · ${i.expiry_date || i.use_by || "소비기한 미입력"}`,
-        ),
-      );
     const form = node("form"),
       name = field("등록할 정확한 재료명"),
       qty = field("측정 중량 (g)", {
@@ -627,7 +748,7 @@
       }),
       expiry = field("표시 소비기한 (선택)", { type: "date" }),
       confirm = checkbox("재료명·실제 중량을 확인했습니다"),
-      save = button("SQLite 재고 등록", () => {}, "primary");
+      save = button("입고 확정", () => {}, "primary");
     save.type = "submit";
     form.append(name.wrap, qty.wrap, expiry.wrap, confirm.wrap, save);
     form.onsubmit = (e) => {
@@ -645,24 +766,12 @@
           Number(qty.input.value),
           expiry.input.value,
         );
-        inventoryMessage = `재고 항목 ${saved.id}을 서버에 등록했습니다. 최신 재고는 추천을 다시 요청해 확인하세요.`;
+        inventoryMessage = `재고 항목 ${saved.inventory_item_id}을 등록했습니다.`;
+        await api.inventory();
         current = "inventory";
       });
     };
-    sqlite.append(
-      form,
-      note(
-        "등록 후 추천을 다시 요청해 최신 스냅샷을 확인하세요. 카메라 인식·재고 수정/삭제 API는 없습니다.",
-      ),
-    );
-  }
-  async function loadInventory() {
-    try {
-      await api.inventory();
-      inventoryError = "";
-    } catch (e) {
-      inventoryError = e.message;
-    }
+    sqlite.append(form);
   }
   function showNutrition(name) {
     run(async () => {
@@ -718,6 +827,20 @@
       "서버가 제공하는 가족을 조회합니다. 가입·초대·프로필 수정 API는 아직 없습니다.",
     );
     const p = panel(root, s.household.name);
+    p.append(
+      note(
+        `가구 권한 · ${{ owner: "소유자", editor: "편집", viewer: "조회" }[s.session.role] || s.session.role}`,
+      ),
+    );
+    p.append(
+      button("다시 로그인", () =>
+        run(() => {
+          api.clearSession();
+          $("#dialog-body").replaceChildren();
+          lastAnswer = inventoryMessage = "";
+        }),
+      ),
+    );
     for (const m of s.household.members) {
       p.append(
         node("h3", m.name),
@@ -784,24 +907,24 @@
       v.classList.toggle("active", v.dataset.view === current);
     }
     document.querySelectorAll("[data-view-link]").forEach((b) => {
-      b.disabled = busy;
+      b.disabled = busy || !s.session;
       b.classList.toggle("active", b.dataset.viewLink === current);
     });
-    $("#demo-tools").disabled = busy;
-    $("#household-settings").textContent = s.household?.name || "가족 조회";
+    $("#demo-tools").disabled = busy || !s.session;
+    $("#household-settings").textContent = s.session
+      ? s.household.name
+      : "가족 로그인";
     const root = views.find((v) => v.dataset.view === current);
     if (errorMessage) {
       const e = node("p", errorMessage, "scenario-warning");
       e.setAttribute("role", "alert");
+      e.dataset.httpStatus = String(errorStatus);
       root.append(e);
+      if (errorStatus === 403)
+        root.append(button("다시 로그인", () => run(() => api.clearSession())));
     }
-    if (!ready) {
-      heading(
-        root,
-        "로컬 API 연결",
-        errorMessage || "서버 데이터를 불러오는 중입니다.",
-      );
-      root.append(button("다시 연결", () => run(initialize), "primary"));
+    if (!s.session) {
+      loginView(root);
       return;
     }
     ({
@@ -815,11 +938,6 @@
       profile,
     })[current](root);
   }
-  async function initialize() {
-    await api.initialize();
-    ready = true;
-    await Promise.all([loadInventory(), api.refreshData()]);
-  }
   document.addEventListener("click", (e) => {
     const b = e.target.closest("[data-view-link]");
     if (b && !busy) {
@@ -832,8 +950,7 @@
   $("#notice-button").onclick = () => go("profile");
   $("#demo-tools").onclick = () =>
     run(async () => {
-      if (!ready) return initialize();
-      await Promise.all([loadInventory(), api.refreshData()]);
+      await Promise.all([api.inventory(), api.refreshData()]);
     });
   $("#dialog-close").onclick = () => $("#scenario-dialog").close();
   function setDevice(device) {
@@ -873,5 +990,4 @@
   current = location.hash.slice(1) || "home";
   if (!views.some((v) => v.dataset.view === current)) current = "home";
   render();
-  run(initialize);
 })();
