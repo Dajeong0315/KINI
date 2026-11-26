@@ -1,6 +1,6 @@
 ﻿from contextlib import closing
 from datetime import datetime
-import json, sqlite3, tempfile
+import json, sqlite3, tempfile, os
 from uuid import uuid4
 from pathlib import Path
 from flask import Blueprint, current_app, jsonify, request
@@ -20,6 +20,33 @@ from .ingredient_normalization import normalize_ingredient
 from .unit_conversion import convert_quantity
 
 api=Blueprint('recommendations',__name__)
+
+
+@api.before_request
+def postgres_supported_routes():
+    # Do not expose private tables through legacy routes whose PostgreSQL
+    # persistence/authorization has not been migrated and verified yet.
+    supported = {'privacy_capabilities', 'demo', 'get_members', 'create_recommendation',
+                 'get_recommendation', 'add_feedback', 'data_releases', 'data_release', 'data_quality_summary'}
+    if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres' and request.endpoint.rsplit('.', 1)[-1] not in supported:
+        return jsonify({'error': '이 API의 PostgreSQL 이전은 아직 완료되지 않았습니다.',
+                        'status': 'not_implemented'}), 501
+
+
+@api.after_request
+def private_recommendation_no_cache(response):
+    if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres':
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def postgres_identity(db, household_id=None, *, write=False):
+    if not getattr(db, 'is_postgres', False):
+        return None
+    scheme, _, token = request.headers.get('Authorization', '').partition(' ')
+    if scheme.lower() != 'bearer' or not token.strip():
+        raise AuthenticationError('가구 세션이 필요합니다.')
+    return authorize(db, token.strip(), household_id=household_id, write=write)
 
 def validated(model):
     return model.model_validate(request.get_json(silent=True) or {})
@@ -252,22 +279,31 @@ def create_session():
 @api.post('/api/recommendations')
 @errors
 def create_recommendation():
+    # Check the session before natural-language parsing can invoke a model.
+    if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres':
+        with closing(open_db()) as db, db:
+            postgres_identity(db, write=True)
     payload=request.get_json(silent=True) or {}
     if 'text' in payload:
         try: obj=parse_recommendation_request(payload['text'])
         except Exception: return jsonify({'error':'자연어 해석에 실패했습니다. 구조화된 요청을 입력해 주세요.'}),400
     else: obj=RecommendationRequest.model_validate(payload)
-    with open_db() as db:
+    with closing(open_db()) as db, db:
+        postgres_identity(db, obj.household_id, write=True)
         result=recommend(db,obj.model_dump(),persist=False)
         result=enrich_with_ai(obj.model_dump(),result)
         result=persist_recommendation(db,obj.model_dump(),result)
     return jsonify(result),201
 
 @api.get('/api/recommendations/<int:request_id>')
+@errors
 def get_recommendation(request_id):
     from .recommendation_provider import catalog_context
-    with open_db() as db:
-        row=db.execute('SELECT result_json,nutrition_data_release_id,allergen_reference_version_id FROM recommendation_requests WHERE id=?',(request_id,)).fetchone()
+    with closing(open_db()) as db, db:
+        postgres_identity(db)
+        row=db.execute('SELECT result_json,nutrition_data_release_id,allergen_reference_version_id,household_id FROM recommendation_requests WHERE id=?',(request_id,)).fetchone()
+        if row:
+            postgres_identity(db, row['household_id'])
         pointer=db.execute('SELECT nutrition_release_id,allergen_reference_version_id FROM data_release_pointers WHERE id=1').fetchone()
         current_catalog = catalog_context(db)
     if not row: return jsonify({'error':'추천 요청을 찾을 수 없습니다.'}),404
@@ -281,7 +317,7 @@ def get_recommendation(request_id):
         for candidate in result.get('recommendations',[]):
             candidate.update({'data_quality':'confirmation_required','requires_confirmation':True,'warnings':['현재 기준으로 재검증되지 않았습니다.']})
     elif result.get('status') == 'recommendations_available' and (row['nutrition_data_release_id'] != pointer['nutrition_release_id'] or row['allergen_reference_version_id'] != pointer['allergen_reference_version_id']):
-        result.update({'status':'stale_unvalidated','requires_confirmation':True})
+        result.update({'status':'stale_unvalidated','recommendations':[],'requires_confirmation':True})
         result.setdefault('warnings',[]).append('Published reference release changed; rerun the recommendation to revalidate.')
     return jsonify(result)
 
@@ -344,9 +380,11 @@ def add_message(session_id):
 @errors
 def add_feedback(request_id):
     obj=validated(FeedbackRequest)
-    with open_db() as db:
+    with closing(open_db()) as db, db:
+        postgres_identity(db, write=True)
         row=db.execute('SELECT household_id,request_json,result_json FROM recommendation_requests WHERE id=?', (request_id,)).fetchone()
         if not row: return jsonify({'error':'추천 요청을 찾을 수 없습니다.'}),404
+        postgres_identity(db, row['household_id'], write=True)
         stored=json.loads(row['result_json'])
         if stored.get('status') != 'recommendations_available' or not stored.get('ai_explanation'): raise ValueError('확인된 추천이 아닙니다.')
         if not db.execute('SELECT 1 FROM recommendation_candidates WHERE request_id=? AND recipe_id=?', (request_id,obj.candidate_recipe_id)).fetchone(): raise ValueError('해당 요청에서 표시된 후보가 아닙니다.')

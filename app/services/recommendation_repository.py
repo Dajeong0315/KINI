@@ -152,6 +152,26 @@ def open_db(path=None, *, seed_demo=None):
         raise
     return db
 
+def recipe_candidates(db):
+    """Public candidate rows only; caller still applies local safety rules."""
+    return [dict(row) for row in db.execute('SELECT * FROM recipes ORDER BY id')]
+
+
+def recipe_ingredient_rows(db, recipe_id):
+    return [dict(row) for row in db.execute('''SELECT ri.quantity_g,i.id,i.name,i.category,
+        n.energy_kcal,n.protein_g,n.carbohydrate_g,n.fat_g,n.sodium_mg
+        FROM recipe_ingredients ri JOIN ingredients i ON i.id=ri.ingredient_id
+        LEFT JOIN ingredient_nutrition n ON n.ingredient_id=i.id
+        WHERE recipe_id=? ORDER BY i.id''', (recipe_id,))]
+
+
+def ingredient_nutrition_row(db, ingredient_id):
+    return db.execute('''SELECT i.*,n.basis_amount_g,n.source_type AS nutrition_source,
+        n.confidence AS nutrition_confidence,n.energy_kcal,n.protein_g,n.carbohydrate_g,n.fat_g,n.sodium_mg
+        FROM ingredients i LEFT JOIN ingredient_nutrition n ON n.ingredient_id=i.id WHERE i.id=?''',
+        (ingredient_id,)).fetchone()
+
+
 def members(db, household_id, ids=None):
     rows=db.execute('SELECT * FROM members WHERE household_id=? ORDER BY id',(household_id,)).fetchall()
     if ids is not None: rows=[r for r in rows if r['id'] in ids]

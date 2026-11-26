@@ -5,7 +5,7 @@ eligible.  The legacy local nutrition row is retained as an explicit demo
 fallback so the existing API remains compatible.
 """
 from dataclasses import dataclass
-from math import fsum
+from math import fsum, isfinite
 from .public_catalog import PublicRecordMissing, service
 from .integrations.cache import CacheUnavailable
 
@@ -31,7 +31,11 @@ def catalog_context(db):
     row = db.execute("""SELECT a.release_id,a.cache_version,s.rights_status,r.status
         FROM active_data_releases a JOIN catalog_data_sources s ON s.code=a.source_code
         JOIN data_releases r ON r.id=a.release_id WHERE a.source_code='mfds_nutrition'""").fetchone()
-    return list(row) if row else None
+    return [row[key] for key in ('release_id', 'cache_version', 'rights_status', 'status')] if row else None
+
+
+def _valid_number(value, *, positive=False):
+    return type(value) in (int, float) and isfinite(value) and (value > 0 if positive else value >= 0)
 
 
 class RecommendationNutritionProvider:
@@ -51,16 +55,16 @@ class RecommendationNutritionProvider:
             FROM catalog_ingredient_links l
             JOIN active_data_releases a ON a.source_code='mfds_nutrition'
                 AND a.release_id=l.release_id
-            JOIN data_releases r ON r.id=l.release_id AND r.status='published'
+            JOIN data_releases r ON r.id=l.release_id AND r.source_code=a.source_code AND r.status='published'
             JOIN catalog_data_sources s ON s.code=a.source_code AND s.rights_status='approved'
-            WHERE l.ingredient_id=? ORDER BY l.reviewed_at DESC LIMIT 1''', (ingredient_id,)).fetchone()
+            WHERE l.ingredient_id=? AND trim(l.reviewed_at)<>'' ORDER BY l.reviewed_at DESC LIMIT 1''', (ingredient_id,)).fetchone()
         if pointer:
             try:
                 result = self.catalog.read(db, 'mfds_nutrition', 'food', pointer['food_id'])
                 if result.item['basis_unit'] != 'g' or result.item['release_id'] != pointer['release_id']:
                     return None
                 values = {n: result.item['nutrients'].get(n) for n in NUTRIENTS}
-                if all(isinstance(v, (int, float)) and v >= 0 for v in values.values()):
+                if all(_valid_number(v) for v in values.values()) and _valid_number(result.item['basis_amount'], positive=True):
                     values['basis_amount_g'] = result.item['basis_amount']
                     return NutritionRecord(values, 'catalog_published', result.item['release_id'], result.cache_status)
                 return None
@@ -70,7 +74,7 @@ class RecommendationNutritionProvider:
         if legacy_row is None:
             return None
         values = {n: legacy_row[n] for n in NUTRIENTS}
-        if not all(isinstance(v, (int, float)) and v >= 0 for v in values.values()):
+        if not all(_valid_number(v) for v in values.values()) or not _valid_number(legacy_row['basis_amount_g'], positive=True):
             return None
         source = legacy_row['nutrition_source'] or legacy_row['source_type'] or 'unknown'
         if source not in ('official_imported', 'verified_product', 'demo'):
