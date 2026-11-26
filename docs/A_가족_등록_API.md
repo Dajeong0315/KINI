@@ -174,3 +174,14 @@ git diff --check
 - `git diff --check` 통과. C 화면·정적 파일·템플릿과 B 조리 서비스 변경 없음.
 
 작업 기반: 팀 main `56ce52d`. 전달 브랜치: `codex/family-onboarding-api`. 별도 브랜치로 푸시하며 main에는 직접 병합하지 않는다.
+
+## main 통합 보완 및 재검증 (2026-11-26)
+
+main `96fc3d2`와 통합했다. 기존 C 로그인 클라이언트가 `/api/members`를 인증 없이 호출하던 부분을 보완해 가구 토큰을 먼저 메모리에 설정하고 인증 조회를 수행한다. 조회 실패 시 세션을 폐기한다. 신규 가족 생성 화면은 추가하지 않았다.
+
+- Windows, Python 3.12 가상환경, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, `KINI_USE_OPENAI=0`, `PYTHONPATH=.`.
+- 온보딩·Chrome 연동: `pytest tests/ui/test_live_flow.py tests/test_family_api.py -q -rs --tb=short` → **44 passed / 67.81초**.
+- 전체 Python: `pytest -q -rs --tb=short` → **254 passed, skip 0 / 177.54초**. Chrome E2E 10개 포함.
+- JavaScript: `node --test tests/ui/api_client.test.cjs tests/ui/scenarios.test.cjs` → **35 passed**.
+- Chrome 390px/1280px 기존 조리 흐름과 API 신규 계정·가족·구성원 생성 후 모바일 로그인·가족 표시 확인. 임시 SQLite·합성 정보·AI/공공 영양 테스트 대역을 사용한다.
+- 실제 외부 AI, 실제 사용자 정보, Supabase migration은 사용하지 않았다. 가입·가족 생성·프로필 편집 화면은 별도 작업으로 남긴다.
