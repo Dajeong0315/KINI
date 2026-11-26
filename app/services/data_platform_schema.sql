@@ -150,3 +150,14 @@ CREATE TABLE IF NOT EXISTS inventory_event_changes (
 CREATE INDEX IF NOT EXISTS event_change_ingredient ON inventory_event_changes(ingredient_id);
 CREATE INDEX IF NOT EXISTS event_change_item ON inventory_event_changes(inventory_item_id);
 CREATE INDEX IF NOT EXISTS event_change_account ON inventory_event_changes(confirmed_by);
+
+-- Account-only sessions bootstrap households; never accepted as inventory sessions.
+CREATE TABLE IF NOT EXISTS local_account_sessions (
+    token_hash TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, revoked_at INTEGER,
+    CHECK(expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS local_account_session_account ON local_account_sessions(account_id);
+CREATE INDEX IF NOT EXISTS local_account_session_expiry ON local_account_sessions(expires_at);
+INSERT OR IGNORE INTO platform_migrations(version) VALUES(3);
