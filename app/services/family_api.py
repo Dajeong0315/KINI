@@ -71,9 +71,9 @@ def session_required(*, account=False, write=False):
                     # Start writes before authorization so role/account changes cannot race them.
                     with db:
                         if write:
-                            db.execute('BEGIN IMMEDIATE')
+                            db.execute('BEGIN' if getattr(db, 'is_postgres', False) else 'BEGIN IMMEDIATE')
                         if account:
-                            identity = local_identity.authorize_account(db, token.strip())
+                            identity = local_identity.authorize_account(db, token.strip(), write=write)
                         else:
                             identity = local_identity.authorize(
                                 db, token.strip(), household_id=kwargs['household_id'], write=write,
@@ -93,8 +93,12 @@ def register():
     with closing(open_db(seed_demo=False)) as db:
         try:
             account_id = local_identity.create_account(db, obj.login_name, obj.password)
-        except sqlite3.IntegrityError:
-            return jsonify({'error': '사용할 수 없는 로그인 이름입니다.'}), 409
+        except Exception as exc:
+            # psycopg is optional for SQLite installs; recognize PostgreSQL's
+            # unique violation without importing its driver on the SQLite path.
+            if isinstance(exc, sqlite3.IntegrityError) or getattr(exc, 'sqlstate', None) == '23505':
+                return jsonify({'error': '사용할 수 없는 로그인 이름입니다.'}), 409
+            raise
     return jsonify({'account_id': account_id, 'login_name': obj.login_name.casefold()}), 201
 
 

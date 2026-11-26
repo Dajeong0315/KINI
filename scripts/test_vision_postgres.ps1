@@ -30,7 +30,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Could not identify PostgreSQL version." }
     & $Python scripts/run_migrations.py
     if ($LASTEXITCODE -ne 0) { throw "Migration failed." }
-    & $Python -m pytest -q tests/test_postgres_inventory_concurrency.py tests/test_postgres_integration.py tests/test_vision_postgres_http.py
+    & $Python -m pytest -q tests/test_postgres_inventory_concurrency.py tests/test_postgres_integration.py tests/test_vision_postgres_http.py tests/test_family_postgres_http.py
     if ($LASTEXITCODE -ne 0) { throw "PostgreSQL tests failed." }
 } finally {
     $env:KINI_DB_BACKEND = $previousBackend

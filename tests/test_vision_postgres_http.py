@@ -34,7 +34,7 @@ def server(monkeypatch):
     password = token_urlsafe(24)
     with _database() as db:
         assert db.execute("SELECT version()").fetchone()[0].startswith("PostgreSQL ")
-        assert db.execute("SELECT version FROM schema_migrations").fetchone()[0] == "001_step1_postgresql"
+        assert db.execute("SELECT version FROM schema_migrations WHERE version='001_step1_postgresql'").fetchone()[0] == "001_step1_postgresql"
         db.execute("TRUNCATE inventory_event_changes, inventory_events, inventory_items, auth_sessions, account_households, local_accounts, ingredients, households CASCADE")
         db.execute("INSERT INTO households(id,name) VALUES (101,'synthetic A'),(202,'synthetic B')")
         db.execute("INSERT INTO ingredients(id,name) VALUES (901,'synthetic ingredient')")
