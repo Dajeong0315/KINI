@@ -8,6 +8,7 @@ function client(handler) {
     AbortController,
     setTimeout,
     clearTimeout,
+    crypto: require("node:crypto").webcrypto,
     fetch: async (path, options) => {
       calls.push({
         path,
@@ -106,11 +107,24 @@ test("stale revalidation prevents meal and cooking writes", async () => {
 });
 test("failed changes preserve verified draft; completion omits non-eaters and prevents duplicate writes", async () => {
   let fail = true;
-  const { api, calls } = client(() =>
-    fail
-      ? response({ error: "invalid change" }, 400)
-      : response({ record_id: 9, nutrition_per_serving: { protein_g: 10 } }),
+  const { api, calls } = client((path) =>
+    path === "/api/auth/login"
+      ? response({
+          access_token: "test-token",
+          household_id: 1,
+          role: "owner",
+          expires_at: Date.now() / 1000 + 3600,
+        })
+      : path.startsWith("/api/members")
+        ? response({ members: [{ id: 3 }, { id: 4 }] })
+        : fail
+          ? response({ error: "invalid change" }, 400)
+          : response({
+              record_id: 9,
+              nutrition_per_serving: { protein_g: 10 },
+            }),
   );
+  await api.login("owner", "test-password", 1);
   seed(api);
   api.state.cooking = {
     id: 4,
@@ -128,8 +142,12 @@ test("failed changes preserve verified draft; completion omits non-eaters and pr
       { member_id: 4, servings: 0 },
     ],
     true,
+    false,
+    [10],
   );
-  assert.deepEqual(calls[1].body.items, [{ member_id: 3, servings: 0.5 }]);
+  assert.deepEqual(calls[3].body.items, [{ member_id: 3, servings: 0.5 }]);
+  assert.deepEqual(calls[3].body.inventory_event_ids, [10]);
+  assert.equal(calls[3].headers.Authorization, "Bearer test-token");
   assert.equal(api.state.cooking.status, "completed");
   await assert.rejects(() =>
     api.complete(
@@ -140,7 +158,7 @@ test("failed changes preserve verified draft; completion omits non-eaters and pr
       true,
     ),
   );
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 4);
 });
 test("partial data state errors do not invent published references", async () => {
   const { api } = client((path) =>
@@ -155,4 +173,62 @@ test("partial data state errors do not invent published references", async () =>
   assert.equal(api.state.data.quality, null);
   assert.equal(api.state.data.releases.current.nutrition_release_id, null);
   assert.equal(api.state.dataErrors.length, 1);
+});
+
+test("a lost confirmation response retries the same event and quantity", async () => {
+  let confirmations = 0;
+  const { api, calls } = client((path) => {
+    if (path === "/api/auth/login")
+      return response({
+        access_token: "test-token",
+        household_id: 1,
+        role: "owner",
+        expires_at: Date.now() / 1000 + 3600,
+      });
+    if (path.startsWith("/api/members"))
+      return response({ members: [{ id: 3 }] });
+    if (path === "/api/cooking-sessions/4")
+      return response({
+        id: 4,
+        status: "active",
+        ingredients: [{ ingredient_id: 1, quantity_g: 120 }],
+      });
+    if (path === "/api/data/inventory")
+      return response({
+        items: [
+          {
+            id: 11,
+            ingredient_id: 1,
+            quantity_g: 50,
+            expiry_date: "2027-01-01",
+            name: "쌀",
+          },
+          {
+            id: 12,
+            ingredient_id: 1,
+            quantity_g: 90,
+            expiry_date: "2027-01-02",
+            name: "쌀",
+          },
+        ],
+      });
+    if (path === "/api/data/inventory/events")
+      return response({ event_id: 20 + confirmations });
+    if (++confirmations === 1) throw Error("response lost");
+    return response({ status: "applied" });
+  });
+  await api.login("owner", "test-password", 1);
+  api.state.cooking = { id: 4, status: "active" };
+  await api.prepareOutflows();
+  await assert.rejects(() => api.confirmOutflows());
+  await api.confirmOutflows();
+  const changes = calls.filter((call) => call.path.endsWith("/confirm"));
+  assert.equal(changes[0].path, changes[1].path);
+  assert.deepEqual(changes[0].body, changes[1].body);
+  assert.equal(changes[0].body.quantity_g, 50);
+  assert.equal(changes[2].body.quantity_g, 70);
+  assert.equal(
+    calls.filter((call) => call.path === "/api/data/inventory/events").length,
+    2,
+  );
 });
