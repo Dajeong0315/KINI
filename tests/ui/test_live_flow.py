@@ -58,15 +58,17 @@ def browser_page():
 def sign_in(page, name='browser-owner', password='synthetic-browser-password'):
     page.get_by_label('로그인 이름').fill(name)
     page.get_by_label('비밀번호').fill(password)
-    page.get_by_role('button', name='로그인', exact=True).click()
+    with page.expect_response(lambda r: r.url.endswith('/api/auth/login')) as login:
+        page.get_by_role('button', name='로그인', exact=True).click()
     page.locator('body[aria-busy=false]').wait_for()
+    return login.value.json().get('access_token')
 
 
 def open_recommend(page, base, name='browser-owner'):
     page.goto(base + '/mobile')
-    sign_in(page, name)
+    token = sign_in(page, name)
     page.get_by_role('button', name='오늘의 메뉴 추천', exact=True).wait_for()
-    members = page.request.get(base + '/api/members?household_id=1').json()['members']
+    members = page.request.get(base + '/api/members?household_id=1', headers={'Authorization': f'Bearer {token}'}).json()['members']
     for m in members:
         if m['id'] != 3:
             page.locator('[data-view=home] .member').filter(has_text=m['name']).click()
@@ -76,6 +78,35 @@ def open_recommend(page, base, name='browser-owner'):
 def request_recommend(page):
     page.get_by_role('button', name='추천 요청', exact=True).click()
     page.locator('body[aria-busy=false]').wait_for()
+
+
+def test_new_family_api_registration_then_existing_mobile_login(live, browser_page):
+    base, _ = live
+    page = browser_page
+    credentials = {'login_name': 'new-family-owner', 'password': 'synthetic-onboarding-password'}
+    assert page.request.post(base + '/api/auth/register', data=credentials).status == 201
+    account = page.request.post(base + '/api/auth/account-login', data=credentials)
+    assert account.status == 200
+    created = page.request.post(base + '/api/households', data={'name': '신규 테스트 가족'},
+                               headers={'Authorization': f"Bearer {account.json()['access_token']}"})
+    assert created.status == 201
+    household_id = created.json()['id']
+    login = page.request.post(base + '/api/auth/login', data={**credentials, 'household_id': household_id})
+    assert login.status == 200
+    headers = {'Authorization': f"Bearer {login.json()['access_token']}"}
+    for name, age in [('새 구성원 하나', 40), ('새 구성원 둘', 10)]:
+        registered = page.request.post(base + f'/api/households/{household_id}/members',
+                                      headers=headers, data={'name': name, 'age': age})
+        assert registered.status == 201
+    assert page.request.get(base + f'/api/members?household_id={household_id}').status == 401
+    page.goto(base + '/mobile')
+    page.get_by_label('가구 ID').fill(str(household_id))
+    sign_in(page, credentials['login_name'], credentials['password'])
+    page.get_by_role('button', name='오늘의 메뉴 추천', exact=True).wait_for()
+    assert page.locator('[data-view=home] .member').count() == 2
+    assert '새 구성원 하나' in page.locator('[data-view=home]').inner_text()
+    assert '새 구성원 둘' in page.locator('[data-view=home]').inner_text()
+    assert not page.evaluate('localStorage.length || sessionStorage.length')
 
 
 @pytest.mark.parametrize('width', [390, 1280])

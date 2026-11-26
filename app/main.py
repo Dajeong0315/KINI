@@ -179,6 +179,8 @@ from app.services.data_status_api import api as data_status_api
 app.register_blueprint(data_status_api)
 from app.services.local_auth_api import api as local_auth_api
 app.register_blueprint(local_auth_api)
+from app.services.family_api import api as family_api
+app.register_blueprint(family_api)
 
 
 if __name__ == "__main__":

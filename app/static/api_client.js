@@ -122,9 +122,17 @@
         password,
         household_id,
       });
-      const members = (
-        await request(`/api/members?household_id=${v.household_id}`)
-      ).members;
+      state.session = { role: v.role, expiresAt: v.expires_at * 1000 };
+      token = v.access_token;
+      let members;
+      try {
+        members = (
+          await request(`/api/members?household_id=${v.household_id}`, undefined, true)
+        ).members;
+      } catch (error) {
+        clearSession();
+        throw error;
+      }
       if (state.household?.id !== v.household_id) {
         invalidate();
         state.selected = members.map((m) => m.id);
@@ -139,8 +147,6 @@
         name: `가구 ${v.household_id}`,
         members,
       };
-      state.session = { role: v.role, expiresAt: v.expires_at * 1000 };
-      token = v.access_token;
     }
     async function inventory() {
       state.inventory = await request("/api/data/inventory", undefined, true);

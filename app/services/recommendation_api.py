@@ -214,14 +214,30 @@ def cooking_question(session_id):
 
 @api.get('/api/households/demo')
 def demo():
-    with open_db() as db:
+    with closing(open_db()) as db:
+        private = db.execute("SELECT 1 FROM metadata WHERE key='dataset_mode' AND value='private'").fetchone()
+        managed = db.execute('SELECT 1 FROM account_households WHERE household_id=1').fetchone()
+        if private or managed:
+            return jsonify({'error': '데모 가족을 사용할 수 없습니다.'}), 404
         return jsonify({'id':1,'name':'데모 가족','members':members(db,1)})
 
 @api.get('/api/members')
 @errors
 def get_members():
     household_id=int(request.args.get('household_id',1))
-    with open_db() as db: return jsonify({'members':members(db,household_id)})
+    with closing(open_db()) as db:
+        managed = db.execute('SELECT 1 FROM account_households WHERE household_id=?', (household_id,)).fetchone()
+        private = db.execute("SELECT 1 FROM metadata WHERE key='dataset_mode' AND value='private'").fetchone()
+        if managed or private:
+            scheme, _, token = request.headers.get('Authorization', '').partition(' ')
+            if scheme.lower() != 'bearer' or not token.strip():
+                return jsonify({'error': '로컬 로그인 세션이 필요합니다.'}), 401
+            from .local_identity import authorize
+            try:
+                authorize(db, token.strip(), household_id=household_id)
+            except PermissionError:
+                return jsonify({'error': '세션 또는 가구 권한을 확인하세요.'}), 403
+        return jsonify({'members':members(db,household_id)})
 
 @api.post('/api/meal-sessions')
 @errors
