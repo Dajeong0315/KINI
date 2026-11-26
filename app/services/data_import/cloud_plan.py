@@ -12,12 +12,13 @@ from .storage_budget import batches, policy
 
 COLUMNS = {
     'source_records': ('release_id','external_id','kind','payload_json','payload_sha256'),
-    'catalog_foods': ('release_id','external_id','name','category','basis_amount','basis_unit'),
+    'catalog_foods': ('release_id','external_id','name','category','basis_amount','basis_unit','energy_kcal','protein_g','carbohydrate_g','fat_g','sodium_mg','sugar_g'),
     'catalog_food_nutrients': ('release_id','food_id','nutrient','amount'),
     'catalog_recipes': ('release_id','external_id','name','servings','cook_time_minutes','ingredients_text','method','category','image_url','source_url'),
     'catalog_recipe_steps': ('release_id','recipe_id','step_no','instruction'),
     'catalog_recipe_ingredients': ('release_id','recipe_id','line_no','ingredient_name','original_text'),
     'catalog_recipe_nutrients': ('release_id','recipe_id','nutrient','amount','basis_amount','basis_unit'),
+    'catalog_import_quarantine': ('release_id','external_id','kind','reason_code','safe_detail'),
 }
 
 
@@ -35,7 +36,7 @@ def literal(value):
     return "'" + value.replace("'", "''") + "'"
 
 
-def prepare(records, source, revision, directory):
+def prepare(records, source, revision, directory, *, quarantined_records=None, coverage=None):
     if source not in ('mfds_recipe', 'mfds_nutrition') or not revision or len(revision) > 200:
         raise ValueError('출처와 revision을 확인하세요.')
     release = str(uuid4())
@@ -52,11 +53,12 @@ def prepare(records, source, revision, directory):
         if kind != ('food' if source=='mfds_nutrition' else 'recipe'):
             raise ValueError('출처와 데이터 종류가 다릅니다.')
         digest = hashlib.sha256(json.dumps(record,ensure_ascii=False,sort_keys=True,allow_nan=False).encode()).hexdigest()
-        provenance = {'schema_version':1,'kind':kind,'representation':'typed_columns','source_revision':revision}
+        # Source/revision live on the parent release; do not repeat them 347k times.
+        provenance = {}
         tables['source_records'].append((release,external_id,kind,provenance,digest))
         if kind=='food':
-            tables['catalog_foods'].append((release,external_id,record['name'],record.get('category'),record['basis_amount'],record['basis_unit']))
-            tables['catalog_food_nutrients'].extend((release,external_id,n,v) for n,v in record['nutrients'].items() if v is not None)
+            tables['catalog_foods'].append((release,external_id,record['name'],record.get('category'),record['basis_amount'],record['basis_unit'],
+                *(record['nutrients'].get(n) for n in ('energy_kcal','protein_g','carbohydrate_g','fat_g','sodium_mg','sugar_g'))))
         else:
             metadata = record.get('source_metadata',{})
             tables['catalog_recipes'].append((release,external_id,record['name'],record.get('servings'),record.get('cook_time_minutes'),
@@ -69,12 +71,19 @@ def prepare(records, source, revision, directory):
             if nutrition:
                 tables['catalog_recipe_nutrients'].extend((release,external_id,n,v,nutrition['basis_amount'],nutrition['basis_unit'])
                     for n,v in nutrition['nutrients'].items() if v is not None)
-    if not seen:
+    accepted_count=len(seen)
+    for rejected in quarantined_records or []:
+        external_id=rejected['external_id']
+        if not external_id or external_id in seen: raise ValueError('격리 ID가 없거나 중복입니다.')
+        seen.add(external_id)
+        tables['source_records'].append((release,external_id,rejected['kind'],{},rejected['payload_sha256']))
+        tables['catalog_import_quarantine'].append((release,external_id,rejected['kind'],rejected['reason_code'],rejected['safe_detail']))
+    if not accepted_count:
         raise ValueError('빈 데이터는 배포할 수 없습니다.')
     counts = {table:len(rows) for table,rows in tables.items()}
     setup = 'BEGIN;\nSELECT public.assert_catalog_capacity(0);\n'
     setup += ('INSERT INTO public.data_releases(id,source_code,source_revision,status,validation_report) VALUES ('+
-        ','.join(literal(v) for v in (release,source,revision,'staging',{'prepared_counts':counts}))+') ON CONFLICT(id) DO NOTHING;\nCOMMIT;\n')
+        ','.join(literal(v) for v in (release,source,revision,'staging',{'prepared_counts':counts,'coverage':coverage or {},'accepted_records':accepted_count,'quarantined_records':len(quarantined_records or [])}))+') ON CONFLICT(id) DO NOTHING;\nCOMMIT;\n')
     (output/'0000_setup.sql').write_text(setup,encoding='utf-8')
     files = ['0000_setup.sql']
     number = 1
@@ -98,7 +107,7 @@ def prepare(records, source, revision, directory):
     publishing+='UPDATE public.data_releases SET status=\'published\',published_at=coalesce(published_at,now()) WHERE id='+literal(release)+';\n'
     publishing+='INSERT INTO public.active_data_releases(source_code,release_id,cache_version) VALUES ('+literal(source)+','+literal(release)+',1) ON CONFLICT(source_code) DO UPDATE SET release_id=excluded.release_id,cache_version=public.active_data_releases.cache_version+1,updated_at=now() WHERE public.active_data_releases.release_id<>excluded.release_id;\nCOMMIT;\n'
     (output/'publish.sql').write_text(publishing,encoding='utf-8')
-    manifest={'release_id':release,'source':source,'revision':revision,'record_count':len(seen),'counts':counts,
+    manifest={'release_id':release,'source':source,'revision':revision,'record_count':len(seen),'accepted_records':accepted_count,'quarantined_records':len(quarantined_records or []),'coverage':coverage or {},'counts':counts,
               'batch_files':files,'validation_file':'validate.sql','publish_file':'publish.sql',
               'full_raw_in_cloud':False,'storage_policy':policy(),
               'sha256':{name:hashlib.sha256((output/name).read_bytes()).hexdigest() for name in files+['validate.sql','publish.sql']}}

@@ -1,15 +1,27 @@
 # KINI A 파트 개발 현황 및 인수인계
 
-기준일: 2026-11-25 (Asia/Seoul) / 담당: A 데이터 플랫폼·연동.
+최신 기준일: 2026-11-26 (Asia/Seoul) / 담당: A 데이터 플랫폼·연동.
 팀 저장소: https://github.com/Dajeong0315/KINI
 시작 기준: main `5d80dc2`. 이 문서는 이번 브랜치의 코드·원격 DB 작업·문서와 남은 통합을 정리한다.
-공유 브랜치: `codex/a-data-platform-specs`.
+공유 브랜치: `codex/redis-cache-integration` (기존 A 기반 포함).
 전달 경로: 팀 저장소에 대한 현재 계정의 push 권한이 없어, 팀 저장소의 기존 fork인
 `brian180099/KINI`에 같은 이름의 새 브랜치를 올리고 `Dajeong0315/KINI:main` 대상 draft PR로 전달한다.
 팀 origin과 기존 fork main은 변경하지 않는다. 새 브랜치의 시작 기준은 팀 main이다.
 main 병합 전 상태이며 실제 서비스 완료 선언이 아니다.
 
-## 최신 후속: 실제 Redis 연결 및 main 통합
+## 최신 완료: 정식 식약처 전체 적재 (2026-11-26)
+
+현재 공유 브랜치는 `codex/redis-cache-integration`, 팀 draft PR은 https://github.com/Dajeong0315/KINI/pull/16 이다.
+영양 347,324건 전체 수집 → 347,321건 배포/3건 격리, 레시피 1,156건 → 1,152건 배포/4건 격리 완료.
+Supabase와 SQLite가 동일 활성 release UUID와 유효 건수/식품 영양값 2,055,428개를 가진다.
+전체 cloud DB 약 166.8MB, public pool 실사용 약 155.0MB/200MB. 냉장고 예약 150MB 유지.
+두 실제 공개 상세 HTTP에서 Redis miss→hit 확인, SQLite integrity=ok/FK=0.
+최신 전체 pytest 155 passed/127.44초, 예산 배분 변경 후 적재/용량 13 passed.
+키는 ignored .env, DB·원본·생성 SQL은 로컬 전용이다. B 추천 provider/화면 E2E 연결은 후속이다.
+세부 건수·구조·격리·남은 통합은 [실제 적재 보고서](A_식약처_실제적재_2026-11-26.md)를 따른다.
+아래 미적재·키 미설정·이전 테스트 실패 문구는 과거 단계 기록이며 최신 현황이 아니다.
+
+## 이전 후속: 실제 Redis 연결 및 main 통합
 
 공유할 새 브랜치: codex/redis-cache-integration. 팀 main f21be76을 merge했다.
 기존 A 기반과 미커밋 상태였던 사전 적재/무료 용량 설계를 안전 커밋으로 보존하고 통합했다.

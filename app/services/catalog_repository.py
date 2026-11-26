@@ -7,8 +7,8 @@ import uuid
 NUTRIENTS = ('energy_kcal', 'protein_g', 'carbohydrate_g', 'fat_g', 'sodium_mg', 'sugar_g')
 
 
-def stage(db, source_code, rows, *, source_revision):
-    release_id = str(uuid.uuid4())
+def stage(db, source_code, rows, *, source_revision, release_id=None):
+    release_id = str(uuid.UUID(release_id)) if release_id else str(uuid.uuid4())
     with db:
         db.execute('INSERT INTO data_releases(id,source_code,status,source_revision) VALUES (?,?,?,?)',
                    (release_id, source_code, 'staging', source_revision))

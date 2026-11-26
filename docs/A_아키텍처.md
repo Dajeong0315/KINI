@@ -63,7 +63,7 @@ flowchart TB
 | SQLite 공개 사본 | 승인 식품/레시피 release·검토 매핑 | 키/외부 인증 URL | 로컬 import·publish·rollback 구현 |
 | Supabase 공개 카탈로그 | 공개/승인 정규화 식품·영양·레시피·출처·release | 개인 재고 이력·가족/기기 ID·개인 질환·원문 | 11개 테이블 생성, 식품 미적재 |
 | Supabase 지표 | 날짜·고정 지표 코드·집계 건수·합계 | 식사/이벤트 원문·식재료별 가구 이력 | 1개 테이블/adapter, 자동 전송 없음 |
-| Redis | 향후 공개 카탈로그·비식별 검색 캐시 | 개인 조건·세션·토큰 | 미연결 |
+| Redis | 승인 공개 식품/레시피 상세 캐시 | 개인 조건·세션·토큰 | 로컬 연결 검증, 검색/FAQ는 후속 |
 
 가구의 '두부를 언제 넣고 뺐는지'는 공개 식품 정보가 아니다. 첨부 그림의 재료 출입 기록
 클라우드 업로드는 로컬 저장으로 조정한다. 원본 이미지·음성은 A 이벤트 API가 받지 않는다.
@@ -154,7 +154,7 @@ flowchart LR
 로컬 release 상태: staging→validated 또는 quarantined→(검증 통과 release만) published.
 격리 release는 수정 재검증 대신 새 stage로 재수집하는 것이 현재 repository 계약이다.
 publish에는 출처 이용 조건 승인이 필요하다. rollback은 같은 source의 published pointer를 복구한다.
-로컬 cache_version은 publish/rollback마다 증가하지만 아직 Redis TTL 구현은 없다.
+로컬 cache_version은 publish/rollback마다 증가한다. 공개 상세는 TTL/jitter가 있는 Redis 또는 bounded memory cache를 사용한다.
 
 원격 DB는 food/recipe kind와 FK, 영양값·기준량, 같은 source의 published pointer를 제약한다.
 원격 writer의 권리 승인·검증·pointer 변경 트랜잭션과 cache_version 증가는 아직 미구현이다.
@@ -178,7 +178,7 @@ main의 SQLite 공식 source와 A source는 data_sources/catalog_data_sources로
 현재 개인화 추천·원문·재고를 캐시하지 않고 공개 자료 조회만 대상으로 설계한다.
 
 - 제안 캐시 키: `catalog:{source}:{release_id}:{cache_version}:{kind}:{external_id}`. TTL 제안 24시간.
-- Redis miss/장애는 로컬 공개 카탈로그 조회로 처리할 예정. 개인 조건 검사는 항상 B에서 실행한다.
+- Redis miss/장애는 로컬 공개 카탈로그 조회로 처리한다. 개인 조건 검사는 항상 B에서 실행한다.
 - 지표는 일별 절대 합계 upsert, 단일 writer. Supabase 지표 장애로 SQLite 재고 변경을 롤백하지 않는다.
 - remote import/sync 실패는 기존 공개 release를 유지한다. 무검증 응답을 현재 데이터로 표시하지 않는다.
 - OpenAI 실패 시 B/C는 api_error로 추천을 중단한다. A의 카탈로그/캐시 fallback이 대체 추천을 생성하는 것은 아니다.
@@ -211,3 +211,15 @@ SQLite·백업 파일은 Git 제외다. SQLite 파일 암호화·보존/삭제·
 
 API 변경 시 API 명세서/공통 계약/fixture를 함께 갱신하고 B/C에게 연결 변경을 전달한다.
 이 문서는 [기존 DB 상세 설계](DB_아키텍처_및_연동_설계.md)와 [워크플로우 반영 설계](워크플로우_반영_설계.md)의 A 구현 기준 요약이다.
+
+## 2026-11-26 실제 적재 구조 보완
+
+cloud: data_releases → source_records(ID/hash) → catalog_foods(기준량 + 핵심 영양 6칼럼).
+레시피는 catalog_recipes → steps/ingredients/nutrients로 분리한다. 부적합 원본은
+catalog_import_quarantine으로 연결해 추천 후보에서 제외한다. 원본 JSON 전체는 로컬 gzip이다.
+
+cloud catalog_food_nutrients_resolved view가 새 핵심 칼럼과 기존 sparse 값을 통합해 읽는다.
+SQLite는 기존 catalog_food_nutrients를 유지하며 검증한 동일 원본 snapshot을 같은 release UUID로
+미러링한다. 공개 상세 HTTP → release/권리 검사 → Redis → miss 시 SQLite 공개 카탈로그 흐름이다.
+Supabase 자동 동기화·B의 추천/RAG provider 연결은 별도 후속이다.
+실제 적재 범위와 실측 용량은 [실제 적재 보고서](A_식약처_실제적재_2026-11-26.md)를 따른다.

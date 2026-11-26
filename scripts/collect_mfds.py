@@ -25,8 +25,9 @@ def main():
     if missing:
         print('필수 .env 항목 미설정: ' + ', '.join(missing))
         return 2
-    if not 1 <= args.page_size <= 100 or args.max_pages < 1:
-        parser.error('page-size 1~100, max-pages 1 이상이 필요합니다.')
+    maximum=500 if sources==['mfds_nutrition'] else 100
+    if not 1 <= args.page_size <= maximum or args.max_pages < 1:
+        parser.error('nutrition 단독 page-size 1~500, 그 외 1~100, max-pages 1 이상이 필요합니다.')
     for source in sources:
         try:
             report = collect(source, os.environ[settings[source]].strip(), args.output,

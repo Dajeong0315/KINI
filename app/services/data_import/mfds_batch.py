@@ -35,7 +35,8 @@ def _get(session, url, *, params=None):
 
 
 def fetch_page(session, source, key, page, page_size):
-    if not key or page < 1 or not 1 <= page_size <= 100:
+    maximum=500 if source=='mfds_nutrition' else 100
+    if not key or page < 1 or not 1 <= page_size <= maximum:
         raise ValueError('정식 인증키와 페이지 설정이 필요합니다.')
     if source == 'mfds_recipe':
         start = (page - 1) * page_size + 1
@@ -70,7 +71,7 @@ def fetch_page(session, source, key, page, page_size):
     return rows, int(total) if total is not None else None
 
 
-def collect(source, key, directory, *, session=None, page_size=100, max_pages=10000):
+def collect(source, key, directory, *, session=None, page_size=100, max_pages=10000, progress=None):
     """Retain compressed public source pages locally. A page file is the resume checkpoint."""
     if not key:
         raise ValueError('식약처 키를 .env에 먼저 설정하세요.')
@@ -105,6 +106,7 @@ def collect(source, key, directory, *, session=None, page_size=100, max_pages=10
                 raise ValueError('동일 페이지가 반복되어 전체 수집을 중단했습니다.')
             seen_pages.add(fingerprint)
         collected += len(rows)
+        if progress is not None: progress({'source':source,'page':page,'rows':collected,'total':expected_total})
         if expected_total is not None and collected >= expected_total:
             if collected != expected_total:
                 raise ValueError('원본 total과 수집 행 수가 다릅니다.')

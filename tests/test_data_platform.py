@@ -42,6 +42,12 @@ def test_migration_is_additive_and_repeatable(db):
     assert [r[0] for r in db.execute('SELECT version FROM platform_migrations ORDER BY version')] == [1, 2]
 
 
+def test_stage_preserves_verified_remote_release_uuid(db):
+    release='12345678-1234-4234-8234-123456789abc'
+    assert stage(db,'mfds_nutrition',[food()],source_revision='remote-fixture',release_id=release)==release
+    assert db.execute('SELECT id FROM data_releases WHERE id=?',(release,)).fetchone()[0]==release
+
+
 def test_session_hash_expiry_revocation_and_join(db):
     create_account(db, 'Owner', 'test-password-123', 1)
     token = login(db, 'owner', 'test-password-123', 1)

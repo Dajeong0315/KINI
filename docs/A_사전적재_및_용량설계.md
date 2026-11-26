@@ -11,8 +11,8 @@
 추천 요청에서 식약처나 만개의레시피를 호출하지 않는다.
 기존 화면의 외부 API 직접 조회 경로 전환은 B/C 통합 때 별도로 필요하다.
 
-현재 정식 두 API 키는 미설정이며 실제 전체 수집/적재는 시작하지 않았다.
-공식 sample 응답 접근 가능 여부만 확인했으며 이를 전체 DB로 적재하지 않았다.
+2026-11-26 정식 두 키를 로컬 .env에 설정해 실제 수집/적재를 실행했다.
+실행 건수·격리·검증 결과는 [실제 적재 보고서](A_식약처_실제적재_2026-11-26.md)를 기준으로 한다.
 만개의레시피는 이용 가능한 API/제휴/파일 제공 권한 확보 전까지 비워 둔다.
 
 ## 2. 500MB 논리 예산
@@ -23,17 +23,17 @@
 | 구역 | 예산 | 저장/상태 |
 |---|---:|---|
 | 시스템·스키마 기본 여유 | 30MB | PostgreSQL/system 관련 기본 여유 |
-| 식품·영양 카탈로그 | 70MB | 식품 typed rows·영양값·인덱스 포함 |
-| 레시피 | 100MB | 레시피·재료 원문·단계·영양·인덱스 포함 |
-| 공통 출처·버전·검색 | 30MB | compact provenance와 검색 여유. 벡터 생성은 없음 |
+| 식품·영양 카탈로그 | 80MB | 식품 typed rows·영양값·인덱스 포함 |
+| 레시피 | 40MB | 레시피·재료 원문·단계·영양·인덱스 포함 |
+| 공통 출처·버전·검색 | 80MB | compact provenance와 검색 여유. 벡터 생성은 없음 |
 | 냉장고 변화 데이터 예약 | 150MB | 공개 카탈로그 적재가 사용하지 못하게 남김. 원본 개인 이력은 로컬 |
 | 운영 집계 | 20MB | 개인/가구 ID 없는 일별 지표 |
 | 교체 적재·복구 여유 | 50MB | 갱신/롤백 시 필요한 작업 여유, 자동으로 채우지 않음 |
 | 안전 여유 | 50MB | 예기치 않은 증가 대비 |
 | 합계 | 500MB | 실제 디스크를 미리 할당하는 방식이 아닌 논리 예산 |
 
-공개 카탈로그는 위 70+100+30=**200MB 공통 pool**로 제한한다.
-70/100/30은 계획상 분배이며 테이블별 독립 hard quota는 아니다.
+공개 카탈로그는 위 80+40+80=**200MB 공통 pool**로 제한한다.
+80/40/80은 계획상 분배이며 테이블별 독립 hard quota는 아니다.
 전체 DB 목표 300MB, 경고 350MB, 신규 카탈로그 쓰기 중지 400MB다.
 공개 pool이 먼저 소진돼도 중단한다. 자동 요금제 변경이나 무단 기존 이력 삭제를 하지 않는다.
 냉장고 예약 150MB의 cloud event schema/권한은 아직 구현하지 않았으며 실제 사용 중인 공간이 아니다.
@@ -86,7 +86,7 @@ servings·cook_time은 원본에서 근거를 확보하지 못하면 null이다.
 재료 원문에서 중량/알레르겐을 추정하지 않는다. 개별 재료 분해·표준 food mapping은 후속 검토다.
 레시피 영양은 ingredient당 100g 정보로 복사하지 않는다.
 
-### FoodNtrCpntDbInfo03 — 실제 응답 fixture 확보 전 초기 mapping
+### FoodNtrCpntDbInfo03 — 정식 응답 검증 mapping
 
 | 응답 필드 | cloud 저장 |
 |---|---|
@@ -95,9 +95,11 @@ servings·cook_time은 원본에서 근거를 확보하지 못하면 null이다.
 | SERVING_SIZE 또는 NUTRI_SERVING_SIZE + 명시 단위 | basis_amount / basis_unit |
 | AMT_NUM1/3/4/6/7/13 | energy_kcal/protein_g/fat_g/carbohydrate_g/sugar_g/sodium_mg |
 
-실제 계정 응답으로 필드/단위 의미를 검증한 뒤 확정한다. 단위 없는 '100'을 100g으로 가정하지 않는다.
+정식 계정 응답의 FOOD_CD/FOOD_NM_KR/SERVING_SIZE/AMT_NUM 필드를 확인했다. 단위 없는 '100'을 100g으로 가정하지 않는다.
 누락은 NULL/영양 행 없음, 음수·NaN·알 수 없는 기준량은 격리한다.
-현재 준비 도구는 한 행이라도 mapping 실패하면 전체 publish를 중단하고 로컬 격리 보고서를 남긴다.
+기본 준비는 한 행이라도 mapping 실패하면 중단한다. 운영자가 --exclude-invalid를 명시하면
+원본 ID/hash와 실패 이유를 별도 quarantine으로 남기고 유효 행만 배포한다. 수집 전체 건수와
+배포 유효 건수를 따로 보고하며 누락값을 추정해 채우지 않는다.
 
 ## 6. 실행 절차
 
@@ -108,7 +110,7 @@ FOODSAFETY_KOREA_API_KEY=<식품안전나라 COOKRCP01 승인 키>
 DATA_GO_KR_SERVICE_KEY=<공공데이터포털 식품영양성분 승인 키>
 ```
 
-값은 채팅·로그·Git에 넣지 않는다. 키 파일은 로컬에만 존재하며 현재 빈 항목으로 준비했다.
+값은 로그·Git에 넣지 않는다. 키는 로컬 ignored .env에만 설정한다.
 
 ```powershell
 python scripts/collect_mfds.py --source all
@@ -116,7 +118,7 @@ python scripts/prepare_mfds.py --source mfds_recipe --input output/catalog-build
 python scripts/prepare_mfds.py --source mfds_nutrition --input output/catalog-build/mfds/mfds_nutrition --revision YYYY-MM-DD
 ```
 
-collector는 100건씩 전체 페이지를 순회하고 로컬 페이지 checkpoint에서 재개한다.
+collector는 기본 100건씩, nutrition 단독은 --page-size 500까지 허용하며 로컬 페이지 checkpoint에서 재개한다.
 인증/호출 한도 오류를 성공으로 저장하지 않으며 totalCount 변경·반복 페이지·불완전 수집은 배포하지 않는다.
 권한 키가 없으면 네트워크 호출 전에 exit 2다. 키가 들어 있는 요청 URL/HTTP 오류 원문은 출력하지 않는다.
 
@@ -124,7 +126,9 @@ prepare는 번호순 SQL 배치·파일 SHA256 manifest·validate.sql·publish.s
 연결된 관리 도구로 번호순 배치를 실행하고 검증/출처 권리 승인 후에만 publish한다.
 전체 수집과 전체 cloud 적재는 다르다. 200MB pool을 넘으면 모든 데이터를 억지로 넣지 않고 멈춘다.
 어떤 범위를 우선 적재할지는 실제 데이터 크기/분류 분석 후 사용자와 합의한다.
-현재 자동 SQL 실행 runner·원격→로컬 downloader·B 추천 조회 통합은 아직 없다.
+동일 snapshot을 검증 후 로컬에 미러링하는 scripts/mirror_mfds_snapshot.py를 추가했다.
+이는 원격 downloader가 아니며 운영자가 cloud publish 완료를 확인한 뒤 실행한다.
+자동 SQL 실행 runner·원격 downloader·B 추천 조회 통합은 아직 없다.
 
 ## 7. 근거와 확인값
 
@@ -132,6 +136,26 @@ prepare는 번호순 SQL 배치·파일 SHA256 manifest·validate.sql·publish.s
 - DB/물리 disk/WAL 구분: https://supabase.com/docs/guides/platform/database-size
 - 식약처 recipe schema: https://www.foodsafetykorea.go.kr/api/newDatasetDetail.do?svc_no=COOKRCP01
 - 영양 API: https://www.data.go.kr/data/15127578/openapi.do
-- 확인 DB 사용량: 약 12.1MB. 실제 식품/레시피 적재 전 값이다.
+- 12.1MB는 적재 전 측정값이다. 최종 실측은 실제 적재 보고서를 확인한다.
 - 신규 quota/collector/planner tests: tests/test_mfds_batch.py.
 - 원격 oversized batch와 초과 예산 거절을 transaction 내 시험 후 rollback했다.
+
+## 8. 실제 전체 영양 적재를 위한 압축 구조
+
+cloud catalog_foods는 에너지·단백질·탄수화물·지방·나트륨·당류 6개 numeric 칼럼을 사용한다.
+식품마다 6개의 별도 영양 행과 인덱스를 반복 생성하는 비용을 줄인다. 기준량/단위는 식품 행에 남긴다.
+누락은 NULL이고 0과 구분한다. catalog_food_nutrients_resolved view는 새 칼럼과 기존 sparse 행을
+동일 nutrient/amount 형태로 읽으며 새 칼럼이 우선한다. backend만 접근할 수 있다.
+로컬 SQLite는 기존 sparse 구조를 유지해 공개 API/Redis 계약을 보존한다.
+
+source_records에는 원본 ID·kind·정규화 SHA256을 남기고 payload_json은 빈 객체로 압축한다.
+출처·revision·원본 전체 건수·유효/격리 건수는 부모 release에 기록한다. 원본 157필드 전체는
+로컬 gzip snapshot에 남으며 cloud에 모두 저장했다고 보고하지 않는다.
+
+source_records의 중복 2열 PK+3열 unique를 3열 PK 하나로 합쳤다.
+food의 기존 PK로 좁혀지는 중복 FK 인덱스와 아직 조회 경로가 없는 이름 인덱스는 제거했다.
+FK 제약과 원본 행은 유지한다. 검색 기능을 붙일 때 실제 질의로 필요한 인덱스를 다시 측정한다.
+quarantine 테이블도 200MB public pool 용량 검사에 포함한다.
+
+실제 전체 적재 후 식품 80MB / 레시피 40MB / 공통 출처 80MB로 공통 pool 내부 계획을 재분배했다.
+최초 70/100/30MB는 실측 전 계획이며, 150MB 냉장고 예약과 전체 한도는 유지한다.

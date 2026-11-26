@@ -85,7 +85,8 @@ def test_plan_only_compact_provenance_and_bounded_insert_batches(tmp_path):
     sql='\n'.join((directory/name).read_text(encoding='utf-8') for name in plan['batch_files'])
     assert "두부''; DROP TABLE x; --" in sql
     assert 'AMT_NUM1' not in sql and 'FOOD_NM_KR' not in sql
-    assert plan['counts']['catalog_food_nutrients']==2
+    assert plan['counts']['catalog_food_nutrients']==0
+    assert 'energy_kcal,protein_g,carbohydrate_g,fat_g,sodium_mg,sugar_g' in sql
     assert plan['full_raw_in_cloud'] is False
     assert 'assert_catalog_capacity' in sql
     assert 'rights_status' in (directory/'publish.sql').read_text(encoding='utf-8')
@@ -96,6 +97,19 @@ def test_sql_nulls_and_nonfinite_rejection():
     assert literal(None)=='NULL'
     assert literal("a'b")=="'a''b'"
     with pytest.raises(ValueError): literal(float('inf'))
+
+
+def test_plan_keeps_rejected_source_ids_without_making_recipe_candidates(tmp_path):
+    record={'external_id':'R1','kind':'recipe','name':'valid','ingredients_text':'tofu',
+            'steps':['cook'],'nutrition':None}
+    rejected={'external_id':'R2','kind':'recipe','reason_code':'missing_ingredients',
+              'safe_detail':'Missing original ingredients','payload_sha256':'a'*64}
+    plan=prepare([record],'mfds_recipe','fixture',tmp_path,quarantined_records=[rejected],
+                 coverage={'source_rows':2,'complete_source_capture':True})
+    assert plan['record_count']==2 and plan['accepted_records']==1 and plan['quarantined_records']==1
+    assert plan['counts']['source_records']==2
+    assert plan['counts']['catalog_recipes']==1
+    assert plan['counts']['catalog_import_quarantine']==1
 
 
 def test_repeated_page_is_not_success(tmp_path,monkeypatch):
