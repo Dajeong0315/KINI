@@ -72,6 +72,10 @@ Authorization: Bearer <기존 가구 세션>
 완료 응답을 잃었다면 조리 GET의 status/meal_record_id를 확인한다. 중복 요청을 새 식사로 기록하지 않는다.
 재고를 화면에서 추가 차감하지 않는다. `POST /api/meal-records`와 리포트 조회 등 미이전 PostgreSQL 경로는 계속 501이다.
 
+후속 변경: PR #36 병합 후 `codex/postgres-meal-reports`에서 식사 이력·리포트 GET을 추가했다.
+그 버전의 조회 계약은 `PostgreSQL_식사이력_영양리포트_검증.md`를 따른다.
+위 501 설명은 본 조리 완료 단위 시점이며, 직접 POST는 후속 조회 단위에서도 계속 501이다.
+
 ## 시험
 
 `tests/test_cooking_completion_postgres.py`는 합성 가구·fake AI·실제 PostgreSQL·실제 HTTP를 사용한다.

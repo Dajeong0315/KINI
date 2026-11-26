@@ -142,3 +142,17 @@
 ## 이번 검증 범위
 
 `tests/test_b_api_handoff.py`는 외부 AI 없이 테스트 더블로 추천 성공, 추천 불가, 개인정보 차단, AI 오류와 추천→조리 세션→재료 변경→섭취 완료를 검증한다. 재료 변경 후 영양 재계산, 실패 시 롤백, 재고 차감과 중복 완료 방지 및 0인분도 확인한다.
+
+## 2026-11-26 추가: 저장 이력·영양 리포트 읽기
+
+`codex/postgres-meal-reports` 이후 서버에는 다음 GET이 추가된다. 기존 탭 메모리 리포트와 별도로 화면 연결이 필요하며, 이 서버 작업에서 C 파일은 수정하지 않았다.
+
+- `GET /api/meal-records`: 기본 최근 7일, `period=today|week|custom`, `start_date/end_date`, 선택적 `member_id`, `limit/offset`.
+- `GET /api/meal-records/{record_id}`: 같은 가구의 저장 식사 상세.
+- `GET /api/reports/nutrition`: 같은 기간/구성원 필터, 기간·날짜·구성원별 실제 섭취 영양 합계.
+
+가구 Bearer 필수, viewer 읽기 허용, no-store. 새 GET의 무효·만료 세션은 401, 가구/구성원 권한은 403, 없는/타 가구 상세는 404다.
+week는 KST 오늘 포함 최근 7일이다. 영양 합계는 저장된 실제 섭취량 기준이며 인분을 다시 곱하지 않는다.
+누락 영양 null은 미확인으로 표시하고 0과 구분한다. `known_nutrition_totals`는 확인된 부분 합계다.
+이력의 `records/items`, 리포트의 `daily/members`, `units`, 품질·페이지 필드는 `PostgreSQL_식사이력_영양리포트_검증.md`를 따른다.
+완료 후 서버 이력/리포트를 재조회하되 화면에서 재고를 또 차감하지 않는다. 직접 POST meal-records는 PostgreSQL에서 계속 501이다.

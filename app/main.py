@@ -183,6 +183,8 @@ from app.services.local_auth_api import api as local_auth_api
 app.register_blueprint(local_auth_api)
 from app.services.family_api import api as family_api
 app.register_blueprint(family_api)
+from app.services.meal_reporting_api import api as meal_reports_api
+app.register_blueprint(meal_reports_api)
 
 
 if __name__ == "__main__":
