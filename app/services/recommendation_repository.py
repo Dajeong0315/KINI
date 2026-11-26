@@ -67,6 +67,7 @@ def initialize(db, *, seed_demo=None):
         db.execute('ALTER TABLE data_sources RENAME TO catalog_data_sources')
     db.executescript(SCHEMA)
     migrations = {
+        'cooking_sessions': {'planned_servings':'INTEGER'},
         'ingredients': {'canonical_name':'TEXT', 'source_type':"TEXT NOT NULL DEFAULT 'unknown'", 'data_confidence':'REAL', 'is_composite':'INTEGER NOT NULL DEFAULT 0', 'requires_label_check':'INTEGER NOT NULL DEFAULT 0', 'active':'INTEGER NOT NULL DEFAULT 1'},
         'ingredient_aliases': {'normalized_alias':'TEXT', 'alias_type':"TEXT NOT NULL DEFAULT 'unknown'", 'confidence':'REAL', 'source_type':"TEXT NOT NULL DEFAULT 'unknown'"},
         'ingredient_nutrition': {'basis_amount_g':'REAL', 'source_type':"TEXT NOT NULL DEFAULT 'unknown'", 'source_reference':'TEXT', 'verified_at':'TEXT', 'confidence':'REAL'},

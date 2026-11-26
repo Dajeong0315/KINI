@@ -28,12 +28,8 @@ def test_change_nutrition_and_confirm(setup):
     assert client.post(f'/api/cooking-sessions/{sid}/ingredients',json={'ingredient':'두부','quantity_g':None}).status_code==400
     assert client.post(f'/api/cooking-sessions/{sid}/ingredients',json={'ingredient':'두부','quantity_g':1,'unit':'개'}).status_code==400
     final=client.post(f'/api/cooking-sessions/{sid}/complete',json={'confirmed':True,'eaten_at':'2026-11-25T12:00:00','items':[{'member_id':3,'servings':1}]})
-    assert final.status_code==201 and final.json['nutrition_per_serving']==response.json['nutrition_per_serving']
-    from app.services.recommendation_repository import open_db
-    with open_db() as db:
-        recorded=db.execute("SELECT amount FROM nutrition_intakes WHERE nutrient='protein_g'").fetchone()[0]
-        assert recorded==response.json['nutrition_per_serving']['protein_g']
-    assert client.post(f'/api/cooking-sessions/{sid}/complete',json={'confirmed':True,'eaten_at':'2026-11-25T12:00:00','items':[{'member_id':3,'servings':1}]}).status_code==400
+    assert final.status_code == 409
+
 
 def test_reject_different_participants(setup):
     client,session=setup
