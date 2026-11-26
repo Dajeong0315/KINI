@@ -28,7 +28,7 @@ def postgres_supported_routes():
     # persistence/authorization has not been migrated and verified yet.
     supported = {'privacy_capabilities', 'demo', 'get_members', 'create_recommendation',
                  'get_recommendation', 'add_feedback', 'data_releases', 'data_release', 'data_quality_summary',
-                 'create_session', 'cooking_create', 'cooking_get', 'cooking_change'}
+                 'create_session', 'cooking_create', 'cooking_get', 'cooking_change', 'cooking_complete'}
     if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres' and request.endpoint.rsplit('.', 1)[-1] not in supported:
         return jsonify({'error': '이 API의 PostgreSQL 이전은 아직 완료되지 않았습니다.',
                         'status': 'not_implemented'}), 501
@@ -220,7 +220,7 @@ def cooking_change(session_id):
 def cooking_complete(session_id):
     obj = validated(CookingCompleteRequest)
     inventory_token = None
-    if 'data_status' in current_app.blueprints:
+    if 'data_status' in current_app.blueprints or os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres':
         scheme, _, token = request.headers.get('Authorization', '').partition(' ')
         if scheme.lower() != 'bearer' or not token.strip():
             return jsonify({'error': '로컬 로그인 세션이 필요합니다.'}), 401

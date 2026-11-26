@@ -175,4 +175,4 @@ def snapshot(db, token):
     pending = db.execute("SELECT count(*) FROM inventory_events WHERE household_id=? AND status='pending_confirmation'", (household,)).fetchone()[0]
     return {'items': items, 'inventory_version': state['inventory_version'] if state else 0,
             'last_applied_at': state['last_applied_at'] if state else None, 'pending_event_count': pending,
-            'source': 'local_sqlite', 'cloud_inventory_export_enabled': False}
+            'source': 'postgresql' if _is_postgres(db) else 'local_sqlite', 'cloud_inventory_export_enabled': False}
