@@ -28,7 +28,8 @@ def postgres_supported_routes():
     # persistence/authorization has not been migrated and verified yet.
     supported = {'privacy_capabilities', 'demo', 'get_members', 'create_recommendation',
                  'get_recommendation', 'add_feedback', 'data_releases', 'data_release', 'data_quality_summary',
-                 'create_session', 'cooking_create', 'cooking_get', 'cooking_change', 'cooking_complete'}
+                 'create_session', 'cooking_create', 'cooking_get', 'cooking_change', 'cooking_complete',
+                 'inventory_normalize', 'ingredient_search'}
     if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres' and request.endpoint.rsplit('.', 1)[-1] not in supported:
         return jsonify({'error': '이 API의 PostgreSQL 이전은 아직 완료되지 않았습니다.',
                         'status': 'not_implemented'}), 501
@@ -107,18 +108,24 @@ def data_quality_summary():
 @errors
 def inventory_normalize():
     obj=validated(InventoryNormalizeRequest)
-    with open_db() as db:
+    with closing(open_db()) as db, db:
+        if getattr(db, 'is_postgres', False): db.execute('SET TRANSACTION READ ONLY')
+        postgres_identity(db)
         ingredient=normalize_ingredient(db,obj.name)
-        conversion=convert_quantity(db,obj.quantity,obj.unit,ingredient['ingredient_id'])
-        return jsonify({'ingredient':ingredient,'conversion':conversion,'requires_confirmation':ingredient['match_status']!='matched' or ingredient['warning'] is not None or conversion['quantity_g'] is None})
+        conversion_id=ingredient['ingredient_id'] if ingredient['match_status'] in ('matched','needs_label_check') else None
+        conversion=convert_quantity(db,obj.quantity,obj.unit,conversion_id)
+        return jsonify({'ingredient':ingredient,'conversion':conversion,'requires_confirmation':ingredient['match_status']!='matched' or ingredient['warning'] is not None or conversion['quantity_g'] is None or conversion['warning'] is not None})
 
 @api.get('/api/ingredients/search')
 @errors
 def ingredient_search():
     query=request.args.get('q','').strip()
     if not query or len(query)>150: raise ValueError('검색어를 입력해 주세요.')
-    with open_db() as db:
-        rows=db.execute('SELECT id,canonical_name,category,source_type,is_composite,requires_label_check FROM ingredients WHERE active=1 AND instr(canonical_name,?)>0 ORDER BY canonical_name,id LIMIT 30',(query,))
+    with closing(open_db()) as db, db:
+        if getattr(db, 'is_postgres', False): db.execute('SET TRANSACTION READ ONLY')
+        postgres_identity(db)
+        contains = 'strpos(COALESCE(canonical_name,name),?)' if getattr(db, 'is_postgres', False) else 'instr(COALESCE(canonical_name,name),?)'
+        rows=db.execute(f'SELECT id,COALESCE(canonical_name,name) AS canonical_name,category,source_type,is_composite,requires_label_check FROM ingredients WHERE active=TRUE AND {contains}>0 ORDER BY COALESCE(canonical_name,name),id LIMIT 30',(query,))
         return jsonify({'ingredients':[dict(row) for row in rows]})
 
 @api.post('/api/inventory/items')

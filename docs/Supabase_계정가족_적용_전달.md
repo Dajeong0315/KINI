@@ -102,3 +102,12 @@ PR #36은 `73f6847`로 main에 병합되어 해당 main은 001~006을 포함한�
 해당 브랜치가 main에 반영된 뒤 적용 기준 SHA를 고정하고 001~007을 검토한다.
 직접 `POST /api/meal-records`, 실제 Supabase 역할/RLS, C 화면 연결, 운영 부하 검증은 별개다.
 자세한 계약·검증·데모 규모 조회 한계는 `PostgreSQL_식사이력_영양리포트_검증.md`를 확인한다.
+
+## 008 재료 검색·단위 변환 단위
+
+PR #37은 `12bab13`으로 main에 병합되어 해당 main은 001~007을 포함한다.
+후속 `codex/postgres-ingredient-tools`는 재료 검색/정규화 API와 008 근거 컬럼을 추가한다.
+main 반영 뒤 고정한 SHA를 기준으로 001~008을 검토한다. 기존 alias/unit/grams는 보존하며
+source_type=unknown 기본값을 자동 승인하지 않는다. 공식/검증된 환산 근거 적재는 별도 명시적 데이터 작업이다.
+이 단위에서도 실제 Supabase migration·운영 권한/RLS·원본 데이터 이전은 실행하지 않는다.
+상세: `PostgreSQL_재료검색_단위변환_검증.md`.
