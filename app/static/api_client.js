@@ -1,9 +1,11 @@
 ﻿/* Same-origin local API boundary. No demo fallback or external model calls. */
 (() => {
   class APIError extends Error {
-    constructor(message, status = 0) {
+    constructor(message, status = 0, details = {}) {
       super(message);
       this.status = status;
+      this.code = details.code;
+      this.ingredients = details.ingredients;
     }
   }
   function createClient({
@@ -46,7 +48,11 @@
           throw new APIError("서버 응답을 읽을 수 없습니다.", r.status);
         }
         if (!r.ok)
-          throw new APIError(v.error || "서버 요청에 실패했습니다.", r.status);
+          throw new APIError(
+            v.error || "서버 요청에 실패했습니다.",
+            r.status,
+            v,
+          );
         return v;
       } catch (e) {
         if (e instanceof APIError) throw e;
@@ -215,12 +221,18 @@
       };
       state.receipts.push({
         ...v,
+        meal_type: state.meal?.meal_type,
+        saved_date: new Date().toLocaleDateString("sv-SE", {
+          timeZone: "Asia/Seoul",
+        }),
         items: eaten,
         name: state.result.recommendations.find(
           (r) => r.recipe_id === state.picked,
         )?.name,
       });
       state.meal = null;
+      // A new recommendation must supply a fresh inventory snapshot after completion.
+      if (state.result) state.result.inventory_snapshot = [];
       return v;
     }
     return {

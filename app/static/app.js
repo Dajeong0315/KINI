@@ -4,6 +4,7 @@
     s = api.state,
     $ = (q, r = document) => r.querySelector(q);
   const views = [...document.querySelectorAll("[data-view]")];
+  const intakeDraft = {};
   let busy = false,
     ready = false,
     errorMessage = "",
@@ -118,7 +119,10 @@
     try {
       await action();
     } catch (e) {
-      errorMessage = e.message;
+      errorMessage =
+        e.status === 409 && e.code === "inventory_confirmation_required"
+          ? "확정된 재료 출고 내역을 확인해야 저장할 수 있습니다. 재고 화면에서 확인 후 다시 시도해 주세요."
+          : e.message;
     } finally {
       busy = false;
       controls.forEach((n, i) => (n.disabled = disabled[i]));
@@ -147,80 +151,115 @@
     return p;
   }
   function home(root) {
-    const fridge = $("#app-shell").dataset.device === "fridge";
-    heading(
-      root,
-      fridge ? "오늘의 식탁" : "오늘의 식사",
-      "서버에 등록된 가족 중 이번 식사의 참여자를 선택하세요.",
+    root.classList.add("fridge-home");
+    const header = node("div", undefined, "meal-greeting");
+    header.append(
+      node("h1", "오늘 저녁, 함께 준비할까요?"),
+      node("p", "냉장고 재료부터 활용해요", "greeting-subtitle"),
     );
-    const stock = node("section", undefined, "stock-overview");
-    stock.append(
-      node("p", fridge ? "냉장고에서 바로 시작" : "우리 집 냉장고", "eyebrow"),
-      node(
-        "h2",
-        s.legacyInventory
-          ? `등록된 재료 ${s.legacyInventory.items.length}가지`
-          : "재고 연결을 확인해 주세요",
-      ),
-      note(
-        s.legacyInventory
-          ? s.legacyInventory.items.map((i) => i.name).join(" · ")
-          : "재고 조회 후 표시합니다.",
-      ),
-      button("재고 살펴보기", () => go("inventory"), "outline"),
+    root.append(header);
+    const hero = node("section", undefined, "meal-hero");
+    const art = node("div", undefined, "meal-hero-art");
+    art.setAttribute("role", "img");
+    art.setAttribute("aria-label", "두부와 버섯을 곁들인 밥, 소개용 이미지");
+    const intro = node("div", undefined, "meal-hero-copy");
+    intro.append(
+      node("p", "우리 가족의 한 끼", "eyebrow"),
+      node("h2", "냉장고 재료로\n따뜻한 한 끼"),
+      note("보유 재료로 만들 수 있는 메뉴를 찾아보세요"),
+      button("오늘의 메뉴 추천", () => go("recommend"), "primary hero-cta"),
+      node("small", "음식 사진은 소개용 이미지입니다."),
     );
-    root.append(stock);
+    hero.append(art, intro);
+    root.append(hero);
     const dashboard = node("div", undefined, "home-dashboard");
     root.append(dashboard);
-    const p = panel(dashboard, "누구와 드시나요?");
-    const list = node("div", undefined, "members");
-    for (const m of s.household.members) {
-      const chosen = s.selected.includes(m.id),
-        b = button(
-          `${chosen ? "✓ " : ""}${m.name}`,
-          () =>
-            run(() =>
-              api.selectMembers(
-                chosen
-                  ? s.selected.filter((id) => id !== m.id)
-                  : [...s.selected, m.id],
-              ),
+    const family = panel(dashboard, "누구와 드시나요?");
+    family.classList.add("family-widget");
+    const members = node("div", undefined, "members");
+    s.household.members.forEach((m, i) => {
+      const chosen = s.selected.includes(m.id);
+      const b = button(
+        "",
+        () =>
+          run(() =>
+            api.selectMembers(
+              chosen
+                ? s.selected.filter((id) => id !== m.id)
+                : [...s.selected, m.id],
             ),
-          "member",
-        );
+          ),
+        "member",
+      );
+      b.append(
+        node("span", ["👨", "👩", "🧒", "👵"][i % 4], "member-portrait"),
+        node("span", m.name),
+        node("span", "✓", "member-check"),
+      );
       b.classList.toggle("selected", chosen);
-      b.setAttribute("aria-pressed", chosen);
+      b.setAttribute("aria-pressed", String(chosen));
+      b.setAttribute("aria-label", m.name);
       b.disabled = busy || active();
-      list.append(b);
+      members.append(b);
+    });
+    family.append(members, note(`이번 식사 ${s.selected.length}명 선택`));
+    if (active())
+      family.append(button("진행 중인 조리 보기", () => go("cook"), "outline"));
+    const stock = panel(dashboard, "냉장고 속 재료");
+    stock.classList.add("stock-widget");
+    stock.append(button("재고 보기", () => go("inventory"), "text-button"));
+    if (inventoryError)
+      stock.append(
+        note("재고 조회에 실패했습니다. 재고 화면에서 다시 확인해 주세요."),
+      );
+    const ingredients = s.legacyInventory?.items || [];
+    ingredients.slice(0, 3).forEach((i, index) => {
+      const row = node("div", undefined, "stock-row");
+      row.append(
+        node("span", ["◒", "◌", "◐"][index], "ingredient-symbol"),
+        node("b", i.name),
+        node("span", `${i.quantity} ${i.unit}`),
+      );
+      stock.append(row);
+    });
+    if (!ingredients.length) stock.append(note("조회된 재고가 없습니다."));
+    stock.append(note("질문용 재고 기준 · 추천 재고와 다를 수 있습니다."));
+    const records = node("section", undefined, "meal-record-widget card");
+    records.append(node("h2", "오늘의 식사 기록"));
+    const row = node("div", undefined, "meal-status-row");
+    const today = new Date().toLocaleDateString("sv-SE", {
+      timeZone: "Asia/Seoul",
+    });
+    for (const [key, label] of [
+      ["breakfast", "아침"],
+      ["lunch", "점심"],
+      ["dinner", "저녁"],
+    ]) {
+      const done = s.receipts.some(
+        (r) => r.meal_type === key && r.saved_date === today,
+      );
+      const chip = node("div", undefined, "meal-status");
+      chip.classList.toggle("done", done);
+      chip.append(
+        node("b", label),
+        node("span", done ? "저장 확인" : "기록 확인 전"),
+      );
+      row.append(chip);
     }
-    p.append(
-      list,
-      note("조리 중에는 참여자를 변경할 수 없습니다."),
-      button("메뉴 추천 조건 선택", () => go("recommend"), "primary"),
-      button("진행 중인 조리 보기", () => go("cook")),
-    );
-    const chat = panel(dashboard, "재고에 대해 물어보기");
-    const q = field("질문", { value: "" });
-    const answer = node("div", undefined, "ai-answer");
-    answer.textContent = lastAnswer;
-    answer.hidden = !lastAnswer;
-    const form = node("form");
-    const send = button("질문 보내기", () => {}, "primary");
-    send.type = "submit";
-    form.append(q.wrap, send);
-    form.onsubmit = (e) => {
-      e.preventDefault();
-      run(async () => {
-        lastAnswer = (await api.chat(q.input.value)).answer;
-      });
-    };
-    chat.append(
-      form,
-      answer,
-      note(
-        "질문 답변과 메뉴 추천에 사용하는 재고 출처가 다릅니다. 실제 재료를 함께 확인해 주세요.",
+    row.append(
+      button(
+        active() ? "먹은 식사 기록" : "식사 기록 보기",
+        () => go(active() ? "record" : "report"),
+        "outline",
       ),
     );
+    records.append(
+      row,
+      note(
+        "이 연결에서 저장한 결과만 표시합니다. 이전 기록 조회는 준비 중입니다.",
+      ),
+    );
+    root.append(records);
   }
   function recommendation(root) {
     heading(root, "메뉴 추천", "가족 선택 → 추천 확인 → 조리 변경 → 섭취 기록");
@@ -423,7 +462,9 @@
       };
       p.append(
         form,
-        note("레시피 분량 자동 조정·재고 차감·취소 API는 없습니다."),
+        note(
+          "완료 시 레시피 전체 사용량을 재고에 반영합니다. 레시피 분량 자동 조정·취소는 아직 지원하지 않습니다.",
+        ),
       );
       const question = field("조리 질문"),
         answer = node("div", undefined, "ai-answer"),
@@ -478,11 +519,14 @@
         .map((m) => {
           const f = field(`${m.name} 실제 섭취량 (인분)`, {
             type: "number",
-            value: 1,
+            value: intakeDraft[`${s.cooking.id}:${m.id}`] ?? 1,
             min: 0,
             max: 10,
             step: 0.25,
           });
+          f.input.oninput = () => {
+            intakeDraft[`${s.cooking.id}:${m.id}`] = f.input.value;
+          };
           form.append(f.wrap);
           return { member: m, input: f.input };
         }),
@@ -519,6 +563,27 @@
     );
     const p = panel(root, "기존 재고 조회 · /api/inventory");
     p.append(button("재고 새로고침", () => run(loadInventory)));
+    p.append(
+      button("재고에 대해 질문", () => {
+        const body = $("#dialog-body");
+        body.replaceChildren();
+        $("#dialog-title").textContent = "재고 질문";
+        const q = field("질문"),
+          form = node("form"),
+          answer = node("p");
+        const send = button("질문 보내기", () => {}, "primary");
+        send.type = "submit";
+        form.append(q.wrap, send);
+        form.onsubmit = (e) => {
+          e.preventDefault();
+          run(async () => {
+            answer.textContent = (await api.chat(q.input.value)).answer;
+          });
+        };
+        body.append(form, answer);
+        $("#scenario-dialog").showModal();
+      }),
+    );
     if (inventoryError) p.append(note(inventoryError));
     if (s.legacyInventory)
       p.append(
@@ -696,6 +761,19 @@
     );
   }
   function render() {
+    const now = new Date();
+    $("#home-time").textContent = now.toLocaleTimeString("ko-KR", {
+      timeZone: "Asia/Seoul",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    $("#home-date").textContent = now.toLocaleDateString("ko-KR", {
+      timeZone: "Asia/Seoul",
+      month: "long",
+      day: "numeric",
+      weekday: "long",
+    });
     history.replaceState(
       null,
       "",

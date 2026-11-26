@@ -1,4 +1,4 @@
-"""Real local HTTP + Chrome E2E; AI/nutrition/chat are deterministic test doubles.
+﻿"""Real local HTTP + Chrome E2E; AI/nutrition/chat are deterministic test doubles.
 Run: python -m pip install playwright; python -m pytest tests/ui/test_live_flow.py -q
 """
 from pathlib import Path
@@ -48,12 +48,12 @@ def browser_page():
 
 def open_recommend(page, base):
     page.goto(base)
-    page.get_by_role('button', name='메뉴 추천 조건 선택', exact=True).wait_for()
+    page.get_by_role('button', name='오늘의 메뉴 추천', exact=True).wait_for()
     members = page.request.get(base + '/api/members?household_id=1').json()['members']
     for m in members:
         if m['id'] != 3:
             page.locator('[data-view=home] .member').filter(has_text=m['name']).click()
-    page.get_by_role('button', name='메뉴 추천 조건 선택', exact=True).click()
+    page.get_by_role('button', name='오늘의 메뉴 추천', exact=True).click()
 
 
 def request_recommend(page):
@@ -87,6 +87,11 @@ def test_real_api_cooking_and_saved_nutrition(live, browser_page):
     page.get_by_role('button', name='조리 완료 · 섭취량 확인', exact=True).click()
     page.get_by_label('실제 섭취량 (인분)').fill('0.5')
     page.get_by_label('실제 사용량과 개인별 섭취량을 확인했습니다').check()
+    import json
+    from app.services.recommendation_repository import open_db
+    with open_db() as db:
+        used=json.loads(db.execute("SELECT ingredients_json FROM cooking_sessions WHERE status='active'").fetchone()[0])
+        stock_before={r['ingredient_id']:r['quantity_g'] for r in db.execute('SELECT ingredient_id,quantity_g FROM inventory_items')}
     with page.expect_response(lambda r: r.url.endswith('/complete')) as saved:
         page.get_by_role('button', name='서버에 식사 기록 저장', exact=True).click()
     saved_nutrition=saved.value.json()['nutrition_per_serving']
@@ -98,6 +103,9 @@ def test_real_api_cooking_and_saved_nutrition(live, browser_page):
         assert db.execute('SELECT servings FROM meal_record_items').fetchone()[0] == .5
         protein = db.execute("SELECT amount FROM nutrition_intakes WHERE nutrient='protein_g'").fetchone()[0]
         assert protein == round(saved_nutrition['protein_g'] * .5, 2)
+        stock_after={r['ingredient_id']:r['quantity_g'] for r in db.execute('SELECT ingredient_id,quantity_g FROM inventory_items')}
+        for ingredient in used:
+            assert stock_after[ingredient['ingredient_id']]==stock_before[ingredient['ingredient_id']]-ingredient['quantity_g']
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     Path('output/ui').mkdir(parents=True,exist_ok=True)
     page.screenshot(path='output/ui/live-mobile-record.png',full_page=True)
@@ -155,10 +163,11 @@ def test_legacy_queries_data_state_and_stale_start(live,browser_page):
     page.get_by_role('dialog').wait_for()
     assert '테스트 영양 응답' in page.get_by_role('dialog').inner_text()
     page.get_by_role('button',name='닫기',exact=True).click()
-    page.locator('[data-view-link=home]:visible').first.click()
+    page.get_by_role('button',name='재고에 대해 질문',exact=True).click()
     page.get_by_label('질문',exact=True).fill('테스트 질문')
     page.get_by_role('button',name='질문 보내기',exact=True).click()
     page.get_by_text('로컬 채팅 테스트 응답',exact=True).wait_for()
+    page.get_by_role('button',name='닫기',exact=True).click()
     page.locator('[data-view-link=profile]:visible').first.click()
     assert '/api/data-quality/summary' in page.locator('[data-view=profile]').inner_text()
     assert 'ThinQ 동기화 상태' in page.locator('[data-view=profile]').inner_text()
@@ -189,7 +198,7 @@ def test_explicit_surfaces_keep_mode_across_resize_refresh_and_switch(live,brows
     base,_=live;page=browser_page
     page.set_viewport_size({'width':1280,'height':960})
     page.goto(base+'/'+device)
-    page.get_by_role('button',name='메뉴 추천 조건 선택',exact=True).wait_for()
+    page.get_by_role('button',name='오늘의 메뉴 추천',exact=True).wait_for()
     assert page.locator('#app-shell').get_attribute('data-device')==device
     assert page.locator('[data-device-choice='+device+']').get_attribute('aria-pressed')=='true'
     assert page.locator('[data-view=home] .ai-answer:visible').count()==0
@@ -197,7 +206,7 @@ def test_explicit_surfaces_keep_mode_across_resize_refresh_and_switch(live,brows
         assert page.locator('#app-shell').bounding_box()['width']<=480
     else:
         assert page.locator('.home-dashboard').evaluate('(n)=>getComputedStyle(n).gridTemplateColumns.split(" ").length')==2
-        assert page.locator('.scenario-field').first.evaluate('(n)=>getComputedStyle(n).color')=='rgb(229, 236, 232)'
+        assert page.locator('.meal-hero').is_visible()
     for width,height in [(390,844),(870,943),(1280,960)]:
         page.set_viewport_size({'width':width,'height':height})
         assert page.locator('#app-shell').get_attribute('data-device')==device
@@ -207,7 +216,7 @@ def test_explicit_surfaces_keep_mode_across_resize_refresh_and_switch(live,brows
     page.set_viewport_size({'width':390,'height':844})
     page.screenshot(path=f'output/ui/separate-{device}-narrow.png',full_page=True)
     page.reload()
-    page.get_by_role('button',name='메뉴 추천 조건 선택',exact=True).wait_for()
+    page.get_by_role('button',name='오늘의 메뉴 추천',exact=True).wait_for()
     assert page.locator('#app-shell').get_attribute('data-device')==device
     # Switching layouts retains the in-memory household selection and active workflow.
     first=page.locator('[data-view=home] .member').first
@@ -218,3 +227,26 @@ def test_explicit_surfaces_keep_mode_across_resize_refresh_and_switch(live,brows
     assert page.locator('#app-shell').get_attribute('data-device')==other
     assert '/'+other in page.url
     assert page.locator('[data-view=home] .member[aria-pressed=true]').count()==selected
+
+
+
+def test_short_stock_rolls_back_and_preserves_intake_draft(live,browser_page):
+    base,_=live;page=browser_page
+    open_recommend(page,base);request_recommend(page)
+    page.locator('.recipe-option').filter(has_text='두부').first.click()
+    page.get_by_label('실제 재료·분량 및 데이터 품질을 확인했습니다').check()
+    page.get_by_role('button',name='조리 시작',exact=True).click()
+    page.get_by_role('button',name='조리 완료 · 섭취량 확인',exact=True).click()
+    from app.services.recommendation_repository import open_db
+    with open_db() as db:
+        db.execute('UPDATE inventory_items SET quantity_g=1,quantity=1 WHERE ingredient_id=4')
+        before=[tuple(r) for r in db.execute('SELECT id,quantity_g FROM inventory_items ORDER BY id')]
+    page.get_by_label('실제 섭취량 (인분)').fill('0.5')
+    page.get_by_label('실제 사용량과 개인별 섭취량을 확인했습니다').check()
+    page.get_by_role('button',name='서버에 식사 기록 저장',exact=True).click()
+    page.get_by_role('alert').wait_for()
+    assert page.get_by_label('실제 섭취량 (인분)').input_value()=='0.5'
+    with open_db() as db:
+        assert db.execute('SELECT COUNT(*) FROM meal_records').fetchone()[0]==0
+        assert [tuple(r) for r in db.execute('SELECT id,quantity_g FROM inventory_items ORDER BY id')]==before
+        assert db.execute('SELECT status FROM cooking_sessions').fetchone()[0]=='active'

@@ -156,3 +156,62 @@ html[data-device=mobile] { background: #e9eaed; color-scheme: light; }
  .app-shell[data-device=fridge] .mobile-nav button { min-width: 52px; }
 }
 .app-shell[data-device=mobile] .members { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+/* Refrigerator home: communal meal dashboard, matching the approved concept. */
+.fridge-clock { display: none; }
+.meal-greeting { margin: 0 0 28px; }
+.greeting-subtitle { margin: 16px 0 0; color: var(--muted); font-size: 1.2rem; }
+.meal-hero { display: grid; grid-template-columns: 1fr 1fr; overflow: hidden; border: 1px solid var(--line); border-radius: 24px; background: #14201c url('/static/images/fridge-meal-hero.png') center/cover; color: #fff9ed; }
+.meal-hero-art { min-height: 360px; }
+.meal-hero-copy { padding: 40px 32px; align-self: center; }
+.view .meal-hero-copy h2 { white-space: pre-line; font-size: clamp(1.9rem,3.4vw,2.8rem); line-height: 1.22; letter-spacing: -.06em; color: #fff9ed; }
+.meal-hero-copy .data-note { font-size: 1rem; line-height: 1.6; color: #e4e9df; }
+.meal-hero-copy .hero-cta { display: block; width: 100%; margin: 24px 0 12px; font-size: 1.2rem; }
+.meal-hero-copy small { color: #b4c5ba; font-size: .65rem; }
+.family-widget, .stock-widget { position: relative; }
+.app-shell .family-widget .members { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; margin: 30px 0 24px; }
+.app-shell .family-widget .member { position: relative; display: flex; flex-direction: column; border: 0; padding: 0; background: transparent; min-width: 0; min-height: 100px; }
+.member-portrait { display: grid; place-items: center; width: 72px; height: 72px; border-radius: 50%; font-size: 2.5rem; background: #b5c2b6; border: 3px solid transparent; }
+.member.selected .member-portrait { border-color: #f35480; box-shadow: 0 0 0 3px #f3548022; }
+.member-check { display: none; position: absolute; right: 0; top: 0; border-radius: 50%; padding: 2px 5px; font-size: .8rem; color: #fff; background: #d62659; }
+.member.selected .member-check { display: block; }
+.stock-widget > .text-button { position: absolute; right: 24px; top: 24px; margin: 0; }
+.stock-row { display: flex; align-items: center; gap: 16px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+.stock-row:first-of-type { margin-top: 12px; }
+.stock-row > span:last-child { margin-left: auto; }
+.ingredient-symbol { font-size: 2rem; color: #bdc99f; width: 45px; text-align: center; }
+.meal-record-widget { margin-top: 22px; }
+.meal-status-row { display: flex; gap: 12px; align-items: center; margin-top: 20px; }
+.meal-status { flex: 1; display: grid; gap: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; }
+.meal-status span { font-size: .75rem; color: var(--muted); }
+.meal-status.done { background: #366346; }
+.meal-status.done span { color: #e2f2df; }
+.app-shell[data-device=fridge] .topbar { gap: 20px; }
+.app-shell[data-device=fridge] .fridge-clock { display: grid; text-align: right; gap: 3px; }
+.fridge-clock strong { font-size: 2rem; line-height: 1; letter-spacing: .02em; }
+.fridge-clock span { font-size: .75rem; color: var(--muted); }
+.app-shell[data-device=fridge] .device-context { display: none; }
+.app-shell[data-device=fridge] .scenario-notice { font-size: .65rem; padding-block: 8px; }
+.app-shell[data-device=fridge] .home-dashboard .card { margin-top: 0; min-height: 280px; }
+.app-shell[data-device=fridge] .home-dashboard { margin-top: 20px; }
+.app-shell[data-device=fridge] .family-widget > .data-note { padding-top: 16px; border-top: 1px solid var(--line); text-align: center; font-size: .9rem; }
+.app-shell[data-device=fridge] .meal-record-widget { padding: 24px; }
+.app-shell[data-device=mobile] .meal-hero { grid-template-columns: 1fr; background-image: none; }
+.app-shell[data-device=mobile] .meal-hero-art { min-height: 210px; background: url('/static/images/fridge-meal-hero.png') left center/160% auto; }
+.app-shell[data-device=mobile] .meal-hero-copy { padding: 24px; }
+.app-shell[data-device=mobile] .member-portrait { width: 58px; height: 58px; font-size: 2rem; }
+.app-shell[data-device=mobile] .member { font-size: .8rem; }
+.app-shell[data-device=mobile] .meal-status-row { flex-wrap: wrap; }
+.app-shell[data-device=mobile] .meal-status-row > button { width: 100%; }
+.app-shell[data-device=mobile] .meal-status { min-width: 70px; padding: 10px; }
+.app-shell[data-device=mobile] .meal-status.done { background: #e6f0df; }
+.app-shell[data-device=mobile] .meal-status.done span { color: #245332; }
+@media(max-width:760px) {
+ .app-shell[data-device=fridge] .meal-hero-copy { padding: 24px 18px; }
+ .app-shell[data-device=fridge] .meal-hero-art { min-height: 290px; }
+ .app-shell[data-device=fridge] .meal-hero-copy h2 { font-size: 1.7rem; }
+ .app-shell[data-device=fridge] .fridge-clock { display: none; }
+ .app-shell[data-device=fridge] .meal-status-row { flex-wrap: wrap; }
+ .app-shell[data-device=fridge] .meal-status-row > button { width: 100%; }
+ .app-shell[data-device=fridge] .member-portrait { width: 58px; height: 58px; font-size: 2rem; }
+}
+.app-shell[data-device=fridge] .family-widget .member.selected { background: transparent; }
