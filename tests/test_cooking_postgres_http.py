@@ -190,12 +190,12 @@ def test_concurrent_edits_are_serialized_without_lost_ingredients(http, rule_db)
     assert stock_state(rule_db) == before
 
 
-def test_completed_draft_cannot_be_changed_and_completion_stays_out_of_scope(http, rule_db):
+def test_completed_draft_cannot_be_changed_and_direct_meal_write_stays_disabled(http, rule_db):
     api, login = http; auth = login(); created = draft(api,auth); sid = created['id']
     rule_db.execute("UPDATE cooking_sessions SET status='completed' WHERE id=?",(sid,)); rule_db.commit()
     before = stock_state(rule_db)
     assert api('POST',f'/api/cooking-sessions/{sid}/ingredients',{'ingredient':'synthetic','quantity_g':80},auth).status_code == 400
-    assert api('POST',f'/api/cooking-sessions/{sid}/complete',{},auth).status_code == 501
+    assert api('POST','/api/meal-records',{},auth).status_code == 501
     assert stock_state(rule_db) == before
 
 

@@ -123,12 +123,13 @@ def _link_confirmed_outflows(db, session, event_ids):
         raise InventoryConfirmationRequired('확정된 출고 이벤트를 각각 한 번씩 선택하세요.', ingredients)
 
     placeholders = ','.join('?' for _ in event_ids)
+    lock = ' FOR UPDATE OF e' if getattr(db, 'is_postgres', False) else ''
     rows = db.execute(f"""
         SELECT e.id, c.ingredient_id, c.quantity_g
         FROM inventory_events e
         JOIN inventory_event_changes c ON c.event_id=e.id
         WHERE e.household_id=? AND e.status='applied' AND e.action='stock_out'
-          AND e.id IN ({placeholders})
+          AND e.id IN ({placeholders}) ORDER BY e.id{lock}
         """, (session['household_id'], *event_ids)).fetchall()
     if len(rows) != len(event_ids):
         raise InventoryConfirmationRequired('같은 가구의 확정 출고 내역을 확인하세요.', ingredients)
@@ -142,27 +143,31 @@ def _link_confirmed_outflows(db, session, event_ids):
     ):
         raise InventoryConfirmationRequired('조리에 사용한 재료와 출고 중량을 확인하세요.', ingredients)
 
-    # Only B owns these links. Claims and the meal record commit in the same transaction.
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS cooking_inventory_event_links (
-            event_id INTEGER PRIMARY KEY REFERENCES inventory_events(id),
-            cooking_session_id INTEGER NOT NULL REFERENCES cooking_sessions(id)
-        )
-    """)
+    # The table is created by schema setup/migration, never during completion.
     if db.execute(
         f'SELECT 1 FROM cooking_inventory_event_links WHERE event_id IN ({placeholders})', event_ids
     ).fetchone():
         raise InventoryConfirmationRequired('이미 조리 기록에 연결된 출고 이벤트가 있습니다.', ingredients)
-    db.executemany(
-        'INSERT INTO cooking_inventory_event_links (event_id,cooking_session_id) VALUES (?,?)',
-        [(event_id, session['id']) for event_id in event_ids],
-    )
+    if getattr(db, 'is_postgres', False):
+        for event_id in sorted(event_ids):
+            inserted = db.execute('''INSERT INTO cooking_inventory_event_links(event_id,cooking_session_id)
+                VALUES (?,?) ON CONFLICT(event_id) DO NOTHING''', (event_id, session['id']))
+            if inserted.rowcount != 1:
+                raise InventoryConfirmationRequired('이미 조리 기록에 연결된 출고 이벤트가 있습니다.', ingredients)
+    else:
+        db.executemany(
+            'INSERT INTO cooking_inventory_event_links (event_id,cooking_session_id) VALUES (?,?)',
+            [(event_id, session['id']) for event_id in event_ids],
+        )
 
 
 def complete(db, session_id, obj, *, inventory_token=None):
     datetime.fromisoformat(obj.eaten_at.replace('Z','+00:00'))
     # Serialize stock checks and session completion across concurrent requests.
-    db.execute('BEGIN IMMEDIATE')
+    if not getattr(db, 'is_postgres', False):
+        db.execute('BEGIN IMMEDIATE')
+    elif inventory_token is None:
+        raise PermissionError('가구 세션이 필요합니다.')
     if inventory_token is not None:
         from .local_identity import authorize
 
@@ -172,10 +177,15 @@ def complete(db, session_id, obj, *, inventory_token=None):
             (session_id, identity['household_id']),
         ).fetchone():
             raise PermissionError('조리 세션의 가구 권한을 확인하세요.')
+    if getattr(db, 'is_postgres', False):
+        db.execute('SELECT id FROM cooking_sessions WHERE id=? FOR UPDATE', (session_id,)).fetchone()
     session=state(db,session_id)
     if session['status']!='active': raise ValueError('이미 완료된 조리 세션입니다.')
     participants={r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=?',(session['meal_session_id'],))}
     if len({x.member_id for x in obj.items})!=len(obj.items) or not all(x.member_id in participants for x in obj.items): raise ValueError('식사 참여자를 중복 없이 선택해 주세요.')
+    cooked_servings = session.get('planned_servings') or db.execute('SELECT servings FROM recipes WHERE id=?', (session['recipe_id'],)).fetchone()[0]
+    if math.fsum(item.servings for item in obj.items) > cooked_servings + 1e-9:
+        raise ValueError('실제 섭취량 합계는 이번 조리 인분을 초과할 수 없습니다.')
     for item in obj.items:
         person=members(db,session['household_id'],[item.member_id])[0]
         for constraint in person['constraints']:
