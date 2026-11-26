@@ -1,0 +1,17 @@
+{
+  "items": [
+    {
+      "id": 12,
+      "ingredient_id": 4,
+      "name": "두부",
+      "quantity_g": 200,
+      "expiry_date": "2027-01-01",
+      "data_status": "needs_confirmation"
+    }
+  ],
+  "inventory_version": 1,
+  "last_applied_at": "2026-11-25 03:00:00",
+  "pending_event_count": 0,
+  "source": "local_sqlite",
+  "cloud_inventory_export_enabled": false
+}

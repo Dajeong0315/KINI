@@ -59,7 +59,12 @@ def connect(path=None):
     db.execute('PRAGMA foreign_keys=ON')
     return db
 
-def initialize(db):
+def initialize(db, *, seed_demo=None):
+    # Earlier A-only databases used data_sources(code,...). main's official import
+    # owns data_sources(id,source_key,...); preserve both without overwriting data.
+    source_columns = {row['name'] for row in db.execute('PRAGMA table_info(data_sources)')}
+    if 'code' in source_columns and 'source_key' not in source_columns:
+        db.execute('ALTER TABLE data_sources RENAME TO catalog_data_sources')
     db.executescript(SCHEMA)
     migrations = {
         'ingredients': {'canonical_name':'TEXT', 'source_type':"TEXT NOT NULL DEFAULT 'unknown'", 'data_confidence':'REAL', 'is_composite':'INTEGER NOT NULL DEFAULT 0', 'requires_label_check':'INTEGER NOT NULL DEFAULT 0', 'active':'INTEGER NOT NULL DEFAULT 1'},
@@ -87,6 +92,8 @@ def initialize(db):
             db.execute(f'ALTER TABLE ingredient_storage_guidelines ADD COLUMN {name} INTEGER')
     if 'recommended_storage' not in guideline_columns:
         db.execute('ALTER TABLE ingredient_storage_guidelines ADD COLUMN recommended_storage TEXT')
+    from .data_platform import migrate
+    migrate(db)
     request_columns = {row['name'] for row in db.execute('PRAGMA table_info(recommendation_requests)')}
     for name, definition in {'nutrition_data_release_id':'INTEGER', 'allergen_reference_version_id':'INTEGER'}.items():
         if name not in request_columns:
@@ -94,6 +101,13 @@ def initialize(db):
     db.execute('INSERT OR IGNORE INTO data_release_pointers(id) VALUES (1)')
     db.commit()
     if db.execute('SELECT 1 FROM households LIMIT 1').fetchone(): return
+    mode = db.execute("SELECT value FROM metadata WHERE key='dataset_mode'").fetchone()
+    if seed_demo is None:
+        seed_demo = os.getenv('KINI_SEED_DEMO', '1') == '1'
+    if not seed_demo or (mode and mode[0] == 'private'):
+        db.execute("INSERT OR REPLACE INTO metadata VALUES ('dataset_mode','private')")
+        db.commit()
+        return
     seed=json.loads((DATA/'demo_household.json').read_text(encoding='utf-8-sig'))
     with db:
         db.execute('INSERT INTO households VALUES (?,?)',(1,seed['household']['name']))
@@ -121,8 +135,14 @@ def initialize(db):
             db.execute('INSERT INTO rag_chunks(document_id,content) VALUES (?,?)',(cur.lastrowid,content))
         db.execute("INSERT INTO metadata VALUES ('db_version','demo-1')")
 
-def open_db(path=None):
-    db=connect(path); initialize(db); return db
+def open_db(path=None, *, seed_demo=None):
+    db=connect(path)
+    try:
+        initialize(db, seed_demo=seed_demo)
+    except Exception:
+        db.close()
+        raise
+    return db
 
 def members(db, household_id, ids=None):
     rows=db.execute('SELECT * FROM members WHERE household_id=? ORDER BY id',(household_id,)).fetchall()

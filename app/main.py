@@ -175,6 +175,10 @@ def file_too_large(_error):
 
 from app.services.recommendation_api import api as recommendation_api
 app.register_blueprint(recommendation_api)
+from app.services.data_status_api import api as data_status_api
+app.register_blueprint(data_status_api)
+from app.services.local_auth_api import api as local_auth_api
+app.register_blueprint(local_auth_api)
 
 
 if __name__ == "__main__":

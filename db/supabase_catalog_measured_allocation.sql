@@ -1,0 +1,2 @@
+-- Rebalance only the 200MB shared catalog plan using measured real ingestion sizes.
+UPDATE public.catalog_storage_policy SET allocation_bytes='{"system":30000000,"food_nutrition":80000000,"recipes":40000000,"catalog_shared_and_search":80000000,"fridge_change_reserve":150000000,"operational_metrics":20000000,"import_and_rollback_buffer":50000000,"safety_margin":50000000}'::jsonb WHERE singleton=true;

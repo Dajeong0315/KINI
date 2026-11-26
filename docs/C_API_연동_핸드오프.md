@@ -11,6 +11,10 @@
 
 ## 화면 흐름에서 현재 사용 가능
 
+### 0. 로컬 가구 로그인 (A 통합 서버)
+
+`POST /api/auth/login`에 `login_name`, `password`, `household_id`를 보내고 `200` 응답의 `access_token`을 받는다. A 재고 조회·출고 확정과 B 조리 완료에 동일한 `Authorization: Bearer <access_token>`을 붙인다. 토큰 수명은 3600초이며 `expires_at`은 Unix epoch 초다. 서버가 계정의 가구 소속과 역할을 확인한다. 잘못된 비밀번호·없는 계정·미소속 가구는 공통 `401`, 요청 형식 오류는 `400`이다. 상세 예시와 오류·권한 계약은 [A 로컬 로그인 HTTP 계약](A_로컬_로그인_API.md)을 따른다.
+
 ### 1. 식사 참여자 세션 생성
 
 `POST /api/meal-sessions`

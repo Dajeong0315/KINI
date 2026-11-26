@@ -1,0 +1,38 @@
+{
+  "policy_version": 1,
+  "implementation_status": "public_catalog_cache_implemented",
+  "enabled": true,
+  "initial_backend": "memory",
+  "redis_connected": null,
+  "key_prefix": "kini:v1:public",
+  "memory_cache_target_bytes": 16000000,
+  "redis_maxmemory_proposal_bytes": 32000000,
+  "max_entries": 1000,
+  "max_value_bytes": 65536,
+  "ttl_jitter_ratio": 0.1,
+  "targets": {
+    "food_detail": {
+      "ttl_seconds": 86400,
+      "published_release_required": true
+    },
+    "recipe_detail": {
+      "ttl_seconds": 86400,
+      "published_release_required": true
+    },
+    "approved_faq_retrieval": {
+      "ttl_seconds": 900,
+      "approved_topic_id_required": true
+    }
+  },
+  "negative_cache_enabled": false,
+  "personalized_recommendation_cache_enabled": false,
+  "raw_query_cache_enabled": false,
+  "private_inventory_cache_enabled": false,
+  "local_pattern_retention_days_proposal": 7,
+  "pattern_cloud_export": "daily_cache_hit_and_miss_counts_only",
+  "redis_eviction_proposal": "allkeys-lfu",
+  "redis_persistence_proposal": "disabled_for_disposable_cache",
+  "database_fallback_required": true,
+  "redis_connection_status_source": "runtime_operations",
+  "approved_faq_cache_implemented": false
+}
