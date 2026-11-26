@@ -1,4 +1,4 @@
-"""Local identity repository; HTTP login/CSRF/rate limiting are separate work."""
+"""Local identity repository shared by the HTTP login adapter and local services."""
 import hashlib
 import secrets
 import time

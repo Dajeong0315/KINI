@@ -135,19 +135,26 @@ def test_completion_stock_zero_portions_and_atomic_failure(monkeypatch, tmp_path
 def inventory_authority(monkeypatch, tmp_path):
     pytest.importorskip('app.services.data_status_api')
     from app.main import app
-    from app.services.local_identity import create_account, login
+    from app.services.local_identity import create_account
     from app.services.recommendation_repository import open_db
 
     monkeypatch.setenv('KINI_DB_PATH', str(tmp_path / 'authority.sqlite3'))
     monkeypatch.setenv('KINI_USE_OPENAI', '0')
     with closing(open_db()) as db:
         create_account(db, 'owner', 'synthetic-test-password', 1)
-        token = login(db, 'owner', 'synthetic-test-password', 1)
         with db:
             db.execute("INSERT INTO households VALUES (2,'other test household')")
         create_account(db, 'other', 'synthetic-other-password', 2)
-        other_token = login(db, 'other', 'synthetic-other-password', 2)
-    return app.test_client(), {'Authorization': f'Bearer {token}'}, {'Authorization': f'Bearer {other_token}'}
+    client = app.test_client()
+    owner = client.post('/api/auth/login', json={
+        'login_name': 'owner', 'password': 'synthetic-test-password', 'household_id': 1,
+    })
+    other = client.post('/api/auth/login', json={
+        'login_name': 'other', 'password': 'synthetic-other-password', 'household_id': 2,
+    })
+    assert owner.status_code == other.status_code == 200
+    return (client, {'Authorization': 'Bearer ' + owner.json['access_token']},
+            {'Authorization': 'Bearer ' + other.json['access_token']})
 
 
 def _draft(client):
@@ -187,7 +194,9 @@ def test_a_outflow_and_cooking_completion_only_change_stock_once(inventory_autho
     client, headers, _ = inventory_authority
     draft = _draft(client)
     second_draft = _draft(client)
-    original = client.get('/api/data/inventory', headers=headers).json
+    snapshot = client.get('/api/data/inventory', headers=headers)
+    assert snapshot.status_code == 200
+    original = snapshot.json
     lots = {item['ingredient_id']: item for item in original['items']}
     event_ids = []
     for item in draft['ingredients']:
@@ -207,6 +216,7 @@ def test_a_outflow_and_cooking_completion_only_change_stock_once(inventory_autho
 
     response = _complete_draft(client, draft, headers, inventory_event_ids=event_ids)
     assert response.status_code == 201
+    assert response.json['record_id'] > 0
     assert response.json['nutrition_per_serving'] == draft['nutrition_per_serving']
     assert client.get('/api/data/inventory', headers=headers).json == after_outflow
     assert _complete_draft(client, draft, headers, inventory_event_ids=event_ids).status_code == 400
@@ -217,6 +227,7 @@ def test_a_outflow_and_cooking_completion_only_change_stock_once(inventory_autho
 
     with closing(open_db()) as db:
         assert db.execute('SELECT COUNT(*) FROM meal_records').fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM nutrition_intakes').fetchone()[0] > 0
         assert db.execute('SELECT COUNT(*) FROM cooking_inventory_event_links').fetchone()[0] == 3
 
 
@@ -232,6 +243,12 @@ def test_a_inventory_completion_requires_authorized_confirmed_stock_out(inventor
 
     before = client.get('/api/data/inventory', headers=headers).json
     pending_id = _inventory_event(client, headers, 'stock_out', 'manual', '두부')
+    foreign_confirmation = client.post(
+        f'/api/data/inventory/events/{pending_id}/confirm', headers=other_headers,
+        json={'ingredient_id': 4, 'inventory_item_id': before['items'][0]['id'], 'quantity_g': 100},
+    )
+    assert foreign_confirmation.status_code == 404
+    assert client.get('/api/data/inventory', headers=headers).json == before | {'pending_event_count': 1}
     assert _complete_draft(client, draft, headers, inventory_event_ids=[pending_id]).status_code == 409
     tofu = next(item for item in before['items'] if item['ingredient_id'] == 4)
     _confirm_event(client, headers, pending_id, ingredient_id=4, inventory_item_id=tofu['id'], quantity_g=100)
