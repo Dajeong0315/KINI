@@ -1,6 +1,7 @@
 ﻿from contextlib import closing
 from datetime import datetime
 import json, sqlite3, tempfile
+from uuid import uuid4
 from pathlib import Path
 from flask import Blueprint, current_app, jsonify, request
 from pydantic import ValidationError
@@ -13,6 +14,8 @@ from .personalization import add_evidence, aggregate, record_recipe, recipe_feat
 from . import cooking
 from .errors import ServiceError
 from .local_stt import transcribe_audio
+from .local_identity import authorize, AuthenticationError, AuthorizationError
+from . import inventory_events
 from .ingredient_normalization import normalize_ingredient
 from .unit_conversion import convert_quantity
 
@@ -27,6 +30,8 @@ def errors(fn):
     def wrapped(*args,**kwargs):
         try: return fn(*args,**kwargs)
         except ValidationError: return jsonify({'error':'요청 값의 형식을 확인해 주세요.'}),400
+        except AuthenticationError: return jsonify({'error':'인증이 필요합니다.'}),401
+        except AuthorizationError: return jsonify({'error':'가구 쓰기 권한이 필요합니다.'}),403
         except (ValueError, sqlite3.IntegrityError, ServiceError): return jsonify({'error':'요청을 처리할 수 없습니다. 입력과 제한 조건을 확인해 주세요.'}),400
     return wrapped
 
@@ -86,13 +91,30 @@ def inventory_add():
     for value in (obj.expiry_date,obj.opened_at):
         if value: datetime.strptime(value,'%Y-%m-%d')
     with open_db() as db:
-        if not db.execute('SELECT 1 FROM households WHERE id=?',(obj.household_id,)).fetchone(): raise ValueError('가구가 없습니다.')
+        auth = request.headers.get('Authorization', '')
+        if not auth.startswith('Bearer '): raise AuthenticationError('인증이 필요합니다.')
+        identity = authorize(db, auth[7:].strip(), household_id=obj.household_id, write=True)
+        if not db.execute('SELECT 1 FROM households WHERE id=?',(identity['household_id'],)).fetchone(): raise ValueError('가구가 없습니다.')
         ingredient=normalize_ingredient(db,obj.name)
         conversion=convert_quantity(db,obj.quantity,obj.unit,obj.ingredient_id)
         if ingredient['ingredient_id']!=obj.ingredient_id or ingredient['match_status'] not in ('matched','needs_label_check') or conversion['quantity_g'] is None: raise ValueError('재료와 중량을 확인해 주세요.')
         status='needs_confirmation' if obj.product_name or ingredient['match_status']=='needs_label_check' else 'verified'
-        cur=db.execute('INSERT INTO inventory_items(household_id,ingredient_id,original_name,quantity,unit,quantity_g,data_status,product_name,label_confirmed,expiry_date,use_by,opened_at,freshness_state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',(obj.household_id,obj.ingredient_id,obj.name,obj.quantity,obj.unit,conversion['quantity_g'],status,obj.product_name,int(obj.label_confirmed),obj.expiry_date,obj.expiry_date,obj.opened_at,obj.freshness_state))
-        return jsonify({'id':cur.lastrowid,'ingredient':ingredient,'conversion':conversion,'data_status':status,'requires_confirmation':status!='verified'}),201
+        if status == 'verified':
+            event = inventory_events.ingest(db, auth[7:].strip(), {
+                'client_event_id': str(uuid4()), 'source': 'manual', 'action': 'stock_in',
+                'detected_label': obj.name, 'confidence': 1.0,
+            })
+            event = inventory_events.confirm(db, auth[7:].strip(), event['event_id'], {
+                'ingredient_id': obj.ingredient_id, 'quantity_g': conversion['quantity_g'],
+                'expiry_date': obj.expiry_date,
+            })
+            item_id = event['inventory_item_id']
+            db.execute('''UPDATE inventory_items SET original_name=?,quantity=?,unit=?,data_status=?,product_name=?,label_confirmed=?,expiry_date=?,use_by=?,opened_at=?,freshness_state=? WHERE id=?''',
+                       (obj.name,obj.quantity,obj.unit,status,obj.product_name,int(obj.label_confirmed),obj.expiry_date,obj.expiry_date,obj.opened_at,obj.freshness_state,item_id))
+        else:
+            cur=db.execute('INSERT INTO inventory_items(household_id,ingredient_id,original_name,quantity,unit,quantity_g,data_status,product_name,label_confirmed,expiry_date,use_by,opened_at,freshness_state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',(obj.household_id,obj.ingredient_id,obj.name,obj.quantity,obj.unit,conversion['quantity_g'],status,obj.product_name,int(obj.label_confirmed),obj.expiry_date,obj.expiry_date,obj.opened_at,obj.freshness_state))
+            item_id=cur.lastrowid
+        return jsonify({'id':item_id,'ingredient':ingredient,'conversion':conversion,'data_status':status,'requires_confirmation':status!='verified'}),201
 
 @api.post('/api/voice/recommendations')
 @errors

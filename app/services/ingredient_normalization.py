@@ -14,7 +14,7 @@ def normalize_ingredient(db, text):
     normalized=normalize_text(text)
     result={'original_text':text,'normalized_text':normalized,'ingredient_id':None,'canonical_name':None,'match_status':'unknown','confidence':0.0,'warning':'등록된 재료를 직접 확인해 주세요.'}
     if not normalized: return result
-    rows=db.execute("SELECT DISTINCT i.* FROM ingredients i LEFT JOIN ingredient_aliases a ON a.ingredient_id=i.id WHERE i.active=1 AND (i.name=? OR i.canonical_name=? OR a.alias=? OR a.normalized_alias=?) ORDER BY i.id",(normalized,normalized,normalized,normalized)).fetchall()
+    rows=db.execute("SELECT DISTINCT i.* FROM ingredients i LEFT JOIN ingredient_aliases a ON a.ingredient_id=i.id WHERE i.active=TRUE AND (i.name=? OR i.canonical_name=? OR a.alias=? OR a.normalized_alias=?) ORDER BY i.id",(normalized,normalized,normalized,normalized)).fetchall()
     if len(rows)>1:
         result.update(match_status='ambiguous',warning='여러 재료가 일치합니다. 직접 선택해 주세요.')
         return result

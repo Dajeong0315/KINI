@@ -12,6 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from .local_identity import authorize
 
 
+def _begin_write(db):
+    # SQLite needs its immediate writer lock; PostgreSQL rejects that syntax.
+    db.execute('BEGIN' if db.__class__.__module__.startswith('app.services') else 'BEGIN IMMEDIATE')
+
+
 class DetectionEvent(BaseModel):
     model_config = ConfigDict(extra='forbid')
     client_event_id: UUID
@@ -49,7 +54,7 @@ def ingest(db, token, payload):
     obj = DetectionEvent.model_validate(payload)
     fingerprint = _fingerprint(obj)
     with db:
-        db.execute('BEGIN IMMEDIATE')
+        _begin_write(db)
         household = authorize(db, token, write=True)['household_id']
         old = db.execute('SELECT * FROM inventory_events WHERE household_id=? AND client_event_id=?',
                          (household, str(obj.client_event_id))).fetchone()
@@ -69,7 +74,7 @@ def confirm(db, token, event_id, payload):
     fingerprint = _fingerprint(obj)
     with db:
         # Serialize before reading quantity so concurrent confirmations cannot overdraw stock.
-        db.execute('BEGIN IMMEDIATE')
+        _begin_write(db)
         identity = authorize(db, token, write=True)
         household = identity['household_id']
         event = db.execute('SELECT * FROM inventory_events WHERE id=? AND household_id=?', (event_id, household)).fetchone()
@@ -81,7 +86,7 @@ def confirm(db, token, event_id, payload):
             return _event_result(event)
         if event['status'] != 'pending_confirmation':
             raise EventConflict('반영할 수 없는 이벤트 상태입니다.')
-        ingredient = db.execute('SELECT * FROM ingredients WHERE id=? AND active=1', (obj.ingredient_id,)).fetchone()
+        ingredient = db.execute('SELECT * FROM ingredients WHERE id=? AND active=TRUE', (obj.ingredient_id,)).fetchone()
         if not ingredient:
             raise ValueError('등록된 재료를 선택하세요.')
         item_id = obj.inventory_item_id
@@ -113,13 +118,13 @@ def confirm(db, token, event_id, payload):
         db.execute('''UPDATE inventory_events SET status='applied',inventory_item_id=?,confirmation_sha256=?,
             applied_at=CURRENT_TIMESTAMP WHERE id=?''', (item_id, fingerprint, event_id))
         db.execute('''INSERT INTO inventory_sync_state VALUES (?,1,CURRENT_TIMESTAMP)
-            ON CONFLICT(household_id) DO UPDATE SET inventory_version=inventory_version+1,last_applied_at=CURRENT_TIMESTAMP''', (household,))
+            ON CONFLICT(household_id) DO UPDATE SET inventory_version=inventory_sync_state.inventory_version+1,last_applied_at=CURRENT_TIMESTAMP''', (household,))
         return _event_result(db.execute('SELECT * FROM inventory_events WHERE id=?', (event_id,)).fetchone())
 
 
 def reject(db, token, event_id):
     with db:
-        db.execute('BEGIN IMMEDIATE')
+        _begin_write(db)
         household = authorize(db, token, write=True)['household_id']
         event = db.execute('SELECT * FROM inventory_events WHERE id=? AND household_id=?', (event_id, household)).fetchone()
         if not event:
