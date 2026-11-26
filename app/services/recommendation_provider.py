@@ -42,10 +42,13 @@ class RecommendationNutritionProvider:
         if pointer:
             try:
                 result = self.catalog.read(db, 'mfds_nutrition', 'food', pointer['food_id'])
+                if result.item['basis_unit'] != 'g' or result.item['release_id'] != pointer['release_id']:
+                    return None
                 values = {n: result.item['nutrients'].get(n) for n in NUTRIENTS}
                 if all(isinstance(v, (int, float)) and v >= 0 for v in values.values()):
                     values['basis_amount_g'] = result.item['basis_amount']
                     return NutritionRecord(values, 'catalog_published', result.item['release_id'], result.cache_status)
+                return None
             except (PublicRecordMissing, CacheUnavailable, ValueError, KeyError, TypeError):
                 return None
 
