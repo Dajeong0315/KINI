@@ -116,6 +116,8 @@ Invoke-RestMethod "$base/api/cooking-sessions/$($cook.id)/complete" -Method Post
 
 조리 세션 생성은 해당 추천 후보와 동일한 가구·참여자의 식사 세션을 요구합니다. 재료 변경과 완료 시 참여자의 알레르기·식이 제한·나트륨 및 재료 영양정보를 재검증합니다. 확인 전이나 검사 실패 시 식사 기록을 만들지 않습니다. 조리 질문은 일반 문서에만 접근하며 검색 실패 시 고정 안내를 반환합니다. 해당 안내는 안전 판정이 아닙니다. 추천에 `excluded_recipe_ids` 배열을 전달하면 이미 본 후보를 제외한 추가 추천을 요청할 수 있습니다. `input_snapshot_hash`는 계산에 사용된 일부 스냅샷과 점수의 지문이며, 전체 DB 백업이나 완전한 재현 로그가 아닙니다. 끼니 목표는 남은 일일 목표의 1/3을 사용하는 데모 추정치입니다.
 
+조리 완료 시 확정된 레시피 전체 사용량을 로컬 SQLite 재고에서 한 번 차감합니다. 재고가 부족하면 차감과 식사 기록을 모두 취소합니다. `items`에서 먹지 않은 참여자는 `servings: 0`으로 기록하거나 생략할 수 있으며 0인분은 선호 학습에 반영하지 않습니다. 기존 JSON 재고나 외부 기기 재고와는 동기화되지 않습니다.
+
 `python scripts/evaluate_recommendations.py`는 개인 데이터 없이 임시 DB에서 41가지 합성 평가를 수행합니다. 참여자·요청 조합 외에 중량 불확실성·단위·복합재료·영양정보 누락을 검사합니다. 모델은 호출하지 않습니다. 실제 모델 지연 비교는 `scripts/benchmark_models.py`와 로컬 모델이 필요합니다. RAG 출처는 아직 검증된 외부 자료가 아닌 데모 문구입니다. Tavily는 키가 있어도 호출되지 않습니다.
 
 음성 추천은 `POST /api/voice/recommendations`의 multipart 필드 `audio`, `household_id`, JSON 배열 문자열 `participant_ids`, `meal_type`을 사용합니다. 기존 `/api/voice`와 별개입니다. 반환된 `interpreted_request`를 확인하세요. 로컬 Ollama가 요청을 해석하지 못하면 조건을 임의로 버리지 않고 422와 전사문을 반환합니다. 해석된 값에 원래 발화의 조건이 빠졌을 가능성도 있으므로 확인이 필요합니다. 예시 (쉘에서 실행):
