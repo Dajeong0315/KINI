@@ -6,7 +6,7 @@ from .freshness import assess_inventory
 from .recommendation_repository import members
 from .recommendation_engine import NUTRIENTS
 from .personalization import add_evidence, aggregate, update_summary
-from .recommendation_provider import RecommendationNutritionProvider
+from .recommendation_provider import RecommendationNutritionProvider, per_serving_nutrition
 from .data_quality import inspect_ingredient
 
 
@@ -35,7 +35,7 @@ def validate(db, session):
     if not portions or portions <= 0: raise ValueError('조리 인분 확인이 필요합니다.')
     people = members(db, session['household_id'], ids)
     if not people or len(people)!=len(ids): raise ValueError('식사 참여자 정보가 부족합니다.')
-    nutrients = {n:0.0 for n in NUTRIENTS}
+    weighted_rows = []
     if not session['ingredients']: raise ValueError('재료가 없습니다.')
     for entry in session['ingredients']:
         item = db.execute('SELECT i.*,n.energy_kcal,n.protein_g,n.carbohydrate_g,n.fat_g,n.sodium_mg FROM ingredients i LEFT JOIN ingredient_nutrition n ON n.ingredient_id=i.id WHERE i.id=?',(entry['ingredient_id'],)).fetchone()
@@ -51,7 +51,8 @@ def validate(db, session):
         guideline_row=db.execute('SELECT * FROM ingredient_storage_guidelines WHERE ingredient_id=? ORDER BY rowid DESC LIMIT 1',(item['id'],)).fetchone()
         guideline=dict(guideline_row) if guideline_row else None
         if any(not assess_inventory(x,guideline=guideline)['usable'] for x in inventory): raise ValueError('재료의 상태 또는 소비기한 확인이 필요합니다.')
-        for n in NUTRIENTS: nutrients[n] += quality[n]*entry['quantity_g']/quality['basis_amount_g']/portions
+        weighted_rows.append((quality, entry['quantity_g'] / portions))
+    nutrients = per_serving_nutrition(weighted_rows)
     for person in people:
         for constraint in person['constraints']:
             if constraint['kind']=='meal_sodium_max_mg' and nutrients['sodium_mg']>float(constraint['value']): raise ValueError('참여자의 식사 나트륨 제한을 초과합니다.')

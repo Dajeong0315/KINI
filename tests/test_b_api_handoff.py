@@ -183,6 +183,41 @@ def _confirm_event(client, headers, event_id, **body):
     assert response.json['status'] == 'applied'
 
 
+@pytest.mark.parametrize("ids,portions", [([3], [0]), ([1,3], [1.5,0])])
+def test_planned_batch_and_actual_intake(inventory_authority, ids, portions):
+    client, headers, _ = inventory_authority
+    req = _request(participant_ids=ids)
+    rec = client.post('/api/recommendations', json=req).json
+    candidate = next(c for c in rec['recommendations'] if c['recipe_id']==2)
+    meal = client.post('/api/meal-sessions', json=req).json
+    draft = client.post('/api/cooking-sessions', json={
+        'meal_session_id':meal['session_id'], 'recommendation_request_id':rec['request_id'],
+        'recipe_id':2}).json
+    assert draft['nutrition_per_serving'] == candidate['nutrition_per_serving']
+    lots = {i['ingredient_id']:i for i in client.get('/api/data/inventory',headers=headers).json['items']}
+    required = {i['ingredient']:i['needed_g'] for i in candidate['inventory_usage']}
+    events = []
+    for entry in draft['ingredients']:
+        lot = lots[entry['ingredient_id']]
+        assert entry['quantity_g'] == required[lot['name']]
+        event = _inventory_event(client, headers,'stock_out','manual',lot['name'])
+        _confirm_event(client, headers,event,ingredient_id=entry['ingredient_id'],
+                       inventory_item_id=lot['id'],quantity_g=entry['quantity_g'])
+        events.append(event)
+    stock = client.get('/api/data/inventory',headers=headers).json
+    done = _complete_draft(client,draft,headers,inventory_event_ids=events,
+                           items=[dict(member_id=i,servings=n) for i,n in zip(ids,portions)])
+    assert done.status_code == 201
+    assert client.get('/api/data/inventory',headers=headers).json == stock
+    from app.services.recommendation_repository import open_db
+    with closing(open_db()) as db:
+        rows = db.execute("""SELECT member_id,amount FROM meal_record_items JOIN nutrition_intakes
+            ON record_item_id=meal_record_items.id WHERE record_id=? AND nutrient='protein_g'""",
+            (done.json['record_id'],)).fetchall()
+    assert dict(rows) == {i:round(candidate['nutrition_per_serving']['protein_g']*n,2)
+                          for i,n in zip(ids,portions)}
+
+
 def test_a_outflow_and_cooking_completion_only_change_stock_once(inventory_authority):
     client, headers, _ = inventory_authority
     draft = _draft(client)

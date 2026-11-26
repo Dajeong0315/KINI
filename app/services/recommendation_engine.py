@@ -8,7 +8,7 @@ from .personalization import aggregate, score_personalization
 from .freshness import assess_inventory
 from .recommendation_llm import PROMPT_VERSION
 from .data_quality import inspect_ingredient
-from .recommendation_provider import RecommendationNutritionProvider
+from .recommendation_provider import RecommendationNutritionProvider, per_serving_nutrition
 
 RULES_VERSION='1.3-data-quality'
 NUTRIENTS=('energy_kcal','protein_g','carbohydrate_g','fat_g','sodium_mg')
@@ -69,7 +69,7 @@ def recommend(db, req, *, persist=True):
                 for c in p['constraints']:
                     if c['kind']=='excluded_ingredient' and c['value'] in (name,item['category']): reasons.append(f'{name}: 식이 제한'); reason_codes.append('dietary_constraint')
         if not ingredients: reasons.append('영양 정보 부족'); reason_codes.append('nutrition_unknown')
-        nutrition={n:round(sum((q[n] or 0)*x['quantity_g']/q['basis_amount_g'] for x,q in zip(ingredients,qualities) if x['quantity_g'] is not None and math.isfinite(x['quantity_g']) and q['basis_amount_g'] and math.isfinite(q['basis_amount_g']) and q['basis_amount_g']>0)/recipe['servings'],2) for n in NUTRIENTS} if len(ingredients)==len(qualities) else {n:0 for n in NUTRIENTS}
+        nutrition = per_serving_nutrition((q, x['quantity_g']/recipe['servings']) for x,q in zip(ingredients,qualities)) if not reasons else dict.fromkeys(NUTRIENTS, 0)
         for p in people:
             for c in p['constraints']:
                 if c['kind']=='meal_sodium_max_mg' and nutrition['sodium_mg']>float(c['value']): reasons.append('식사 나트륨 제한 초과'); reason_codes.append('health_constraint')

@@ -5,10 +5,18 @@ eligible.  The legacy local nutrition row is retained as an explicit demo
 fallback so the existing API remains compatible.
 """
 from dataclasses import dataclass
+from math import fsum
 from .public_catalog import PublicRecordMissing, service
 from .integrations.cache import CacheUnavailable
 
 NUTRIENTS = ('energy_kcal', 'protein_g', 'carbohydrate_g', 'fat_g', 'sodium_mg')
+
+
+def per_serving_nutrition(weighted_rows):
+    """Rows carry validated nutrient facts and grams per serving."""
+    rows = list(weighted_rows)
+    return {n: round(fsum(q[n] * grams / q['basis_amount_g'] for q, grams in rows), 2)
+            for n in NUTRIENTS}
 
 
 @dataclass(frozen=True)
