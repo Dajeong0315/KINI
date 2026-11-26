@@ -75,8 +75,11 @@ def _answer_question(question: str) -> dict[str, object]:
 
 
 @app.get("/")
+@app.get("/fridge")
+@app.get("/mobile")
 def index():
-    return render_template("index.html", model=configured_model())
+    device_mode = {"/fridge": "fridge", "/mobile": "mobile"}.get(request.path, "auto")
+    return render_template("index.html", model=configured_model(), device_mode=device_mode)
 
 
 @app.get("/api/inventory")

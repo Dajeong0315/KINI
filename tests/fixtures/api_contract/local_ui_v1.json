@@ -1,0 +1,132 @@
+{
+  "contract_status": "observed-main-56e317e-not-team-approved",
+  "data_releases": {
+    "allergen_reference_versions": [],
+    "current": {
+      "allergen_reference_version_id": null,
+      "id": 1,
+      "nutrition_release_id": null,
+      "updated_at": "2026-11-25 08:11:16"
+    },
+    "nutrition_releases": []
+  },
+  "data_quality_summary": {
+    "active_mappings": 0,
+    "current": {
+      "allergen_reference_version_id": null,
+      "id": 1,
+      "nutrition_release_id": null,
+      "updated_at": "2026-11-25 08:11:16"
+    },
+    "ingredients_by_source": [
+      {
+        "count": 9,
+        "source_type": "demo"
+      }
+    ],
+    "note": "Product allergens and cross-contact are not inferred from nutrition imports.",
+    "official_food_items": 0
+  },
+  "meal_session": {
+    "household_id": 1,
+    "meal_type": "dinner",
+    "participant_ids": [
+      3
+    ],
+    "session_id": 1
+  },
+  "cooking_session": {
+    "completed_at": null,
+    "created_at": "2026-11-25 08:11:16",
+    "data_quality": "demo_data",
+    "household_id": 1,
+    "id": 1,
+    "ingredients": [
+      {
+        "ingredient_id": 1,
+        "quantity_g": 400.0
+      },
+      {
+        "ingredient_id": 4,
+        "quantity_g": 400.0
+      },
+      {
+        "ingredient_id": 5,
+        "quantity_g": 300.0
+      }
+    ],
+    "meal_record_id": null,
+    "meal_session_id": 1,
+    "nutrition_confidence": "데모 추정치",
+    "nutrition_per_serving": {
+      "carbohydrate_g": 32.38,
+      "energy_kcal": 222.5,
+      "fat_g": 5.32,
+      "protein_g": 13.02,
+      "sodium_mg": 11.75
+    },
+    "recipe_id": 2,
+    "request_id": 1,
+    "requires_confirmation": true,
+    "status": "active",
+    "warnings": [
+      "교차접촉은 자동 판정하지 않습니다.",
+      "재료 또는 영양 정보가 데모이거나 출처 확인이 필요합니다."
+    ]
+  },
+  "cooking_changed": {
+    "completed_at": null,
+    "created_at": "2026-11-25 08:11:16",
+    "data_quality": "demo_data",
+    "household_id": 1,
+    "id": 1,
+    "ingredients": [
+      {
+        "ingredient_id": 1,
+        "quantity_g": 400.0
+      },
+      {
+        "ingredient_id": 4,
+        "quantity_g": 400.0
+      }
+    ],
+    "meal_record_id": null,
+    "meal_session_id": 1,
+    "nutrition_confidence": "데모 추정치",
+    "nutrition_per_serving": {
+      "carbohydrate_g": 29.9,
+      "energy_kcal": 206.0,
+      "fat_g": 5.1,
+      "protein_g": 10.7,
+      "sodium_mg": 8.0
+    },
+    "recipe_id": 2,
+    "request_id": 1,
+    "requires_confirmation": true,
+    "status": "active",
+    "warnings": [
+      "교차접촉은 자동 판정하지 않습니다.",
+      "재료 또는 영양 정보가 데모이거나 출처 확인이 필요합니다."
+    ]
+  },
+  "cooking_completed": {
+    "ingredients": [
+      {
+        "ingredient_id": 1,
+        "quantity_g": 400.0
+      },
+      {
+        "ingredient_id": 4,
+        "quantity_g": 400.0
+      }
+    ],
+    "nutrition_per_serving": {
+      "carbohydrate_g": 29.9,
+      "energy_kcal": 206.0,
+      "fat_g": 5.1,
+      "protein_g": 10.7,
+      "sodium_mg": 8.0
+    },
+    "record_id": 1
+  }
+}

@@ -1,9 +1,9 @@
 {
   "name": "식탁의 기준",
   "short_name": "식탁의 기준",
-  "start_url": "/",
+  "start_url": "/mobile",
   "display": "standalone",
-  "background_color": "#111315",
+  "background_color": "#f7f7f8",
   "theme_color": "#c9003b",
   "lang": "ko-KR"
 }
