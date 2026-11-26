@@ -14,7 +14,18 @@ from .local_identity import authorize
 
 def _begin_write(db):
     # SQLite needs its immediate writer lock; PostgreSQL rejects that syntax.
-    db.execute('BEGIN' if db.__class__.__module__.startswith('app.services') else 'BEGIN IMMEDIATE')
+    db.execute('BEGIN' if _is_postgres(db) else 'BEGIN IMMEDIATE')
+
+
+def _is_postgres(db):
+    return getattr(db, 'is_postgres', False)
+
+
+def _lock_event(db, event_id, household):
+    query = 'SELECT * FROM inventory_events WHERE id=? AND household_id=?'
+    if _is_postgres(db):
+        query += ' FOR UPDATE'
+    return db.execute(query, (event_id, household)).fetchone()
 
 
 class DetectionEvent(BaseModel):
@@ -56,6 +67,17 @@ def ingest(db, token, payload):
     with db:
         _begin_write(db)
         household = authorize(db, token, write=True)['household_id']
+        if _is_postgres(db):
+            db.execute('''INSERT INTO inventory_events
+                (household_id,client_event_id,source,action,detected_label,confidence,payload_sha256)
+                VALUES (?,?,?,?,?,?,?) ON CONFLICT (household_id,client_event_id) DO NOTHING''',
+                       (household, str(obj.client_event_id), obj.source, obj.action,
+                        obj.detected_label, obj.confidence, fingerprint))
+            old = db.execute('SELECT * FROM inventory_events WHERE household_id=? AND client_event_id=?',
+                             (household, str(obj.client_event_id))).fetchone()
+            if old['payload_sha256'] != fingerprint:
+                raise EventConflict('같은 이벤트 ID의 내용이 다릅니다.')
+            return _event_result(old)
         old = db.execute('SELECT * FROM inventory_events WHERE household_id=? AND client_event_id=?',
                          (household, str(obj.client_event_id))).fetchone()
         if old:
@@ -77,7 +99,7 @@ def confirm(db, token, event_id, payload):
         _begin_write(db)
         identity = authorize(db, token, write=True)
         household = identity['household_id']
-        event = db.execute('SELECT * FROM inventory_events WHERE id=? AND household_id=?', (event_id, household)).fetchone()
+        event = _lock_event(db, event_id, household)
         if not event:
             raise LookupError('이벤트를 찾을 수 없습니다.')
         if event['status'] == 'applied':
@@ -105,13 +127,22 @@ def confirm(db, token, event_id, payload):
         else:
             if item_id is None or obj.expiry_date is not None:
                 raise ValueError('출고할 재고 ID가 필요하며 소비기한은 변경할 수 없습니다.')
-            item = db.execute('SELECT * FROM inventory_items WHERE id=? AND household_id=? AND ingredient_id=?',
-                              (item_id, household, obj.ingredient_id)).fetchone()
+            item_query = 'SELECT * FROM inventory_items WHERE id=? AND household_id=? AND ingredient_id=?'
+            if _is_postgres(db):
+                item_query += ' FOR UPDATE'
+            item = db.execute(item_query, (item_id, household, obj.ingredient_id)).fetchone()
             if not item or item['quantity_g'] is None or obj.quantity_g > item['quantity_g']:
                 raise ValueError('재고 소속·재료·남은 수량을 확인하세요.')
             remaining = max(0, item['quantity_g'] - obj.quantity_g)
             before = item['quantity_g']
-            db.execute("UPDATE inventory_items SET quantity_g=?,quantity=?,unit='g' WHERE id=?", (remaining, remaining, item_id))
+            if _is_postgres(db):
+                updated = db.execute("""UPDATE inventory_items SET quantity_g=?,quantity=?,unit='g'
+                    WHERE id=? AND household_id=? AND ingredient_id=? AND quantity_g >= ?""",
+                    (remaining, remaining, item_id, household, obj.ingredient_id, obj.quantity_g))
+                if updated.rowcount != 1:
+                    raise ValueError('inventory quantity changed during confirmation')
+            else:
+                db.execute("UPDATE inventory_items SET quantity_g=?,quantity=?,unit='g' WHERE id=?", (remaining, remaining, item_id))
         db.execute('''INSERT INTO inventory_event_changes
             (event_id,ingredient_id,inventory_item_id,quantity_g,before_quantity_g,after_quantity_g,confirmed_by)
             VALUES (?,?,?,?,?,?,?)''', (event_id, obj.ingredient_id, item_id, obj.quantity_g, before, remaining, identity['account_id']))
@@ -126,7 +157,7 @@ def reject(db, token, event_id):
     with db:
         _begin_write(db)
         household = authorize(db, token, write=True)['household_id']
-        event = db.execute('SELECT * FROM inventory_events WHERE id=? AND household_id=?', (event_id, household)).fetchone()
+        event = _lock_event(db, event_id, household)
         if not event:
             raise LookupError('이벤트를 찾을 수 없습니다.')
         if event['status'] == 'applied':
