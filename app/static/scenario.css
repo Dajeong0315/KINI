@@ -1,0 +1,217 @@
+/* Additive controls for the original KINI page. Keep its layout and themes. */
+[hidden] { display: none !important; }
+.scenario-notice { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 30px; border-bottom: 1px solid var(--line); font-size: .74rem; line-height: 1.6; background: var(--panel); }
+.scenario-notice .text-button { flex-shrink: 0; margin: 0; }
+.scenario-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 20px 0; }
+.scenario-controls > .data-note { flex-basis: 100%; margin: 0; }
+.scenario-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.scenario-field { display: grid; gap: 8px; min-width: 0; font-size: .78rem; line-height: 1.5; font-weight: 650; }
+.scenario-field input, .scenario-field select, #scenario-dialog textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 10px 11px; border: 1px solid #a9b8af; border-radius: 8px; background: #fff; color: #193b37; font: inherit; }
+.scenario-field select { max-width: 100%; }
+.scenario-field input[type=file] { white-space: normal; }
+.scenario-check { display: flex; align-items: start; gap: 10px; margin: 16px 0; font-size: .8rem; line-height: 1.7; }
+.scenario-check input { flex: 0 0 20px; width: 20px; height: 20px; margin: 3px 0; accent-color: #c9003b; }
+.scenario-status { margin: 18px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; font-size: .84rem; line-height: 1.7; background: var(--panel); }
+.scenario-status .text-button { display: block; }
+.scenario-status[data-state=api_error], .scenario-status[data-state=privacy_blocked], .scenario-status[data-state=stale_unvalidated] { color: #85203e; border-color: #dca7b6; background: #fff0f4; }
+.scenario-warning { font-size: .78rem; color: #ffcfb8; line-height: 1.7; }
+.reason-card { min-width: 0; }
+.reason-card .nutrition-strip { line-height: 1.7; }
+.reason-card details { font-size: .8rem; line-height: 1.7; }
+.reason-card details .data-note { color: #d6e5dd; }
+.members { flex-wrap: wrap; }
+.member { min-height: 62px; }
+button:disabled { cursor: not-allowed; opacity: .48; }
+select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid #d14d75; outline-offset: 3px; }
+button, select { touch-action: manipulation; }
+.recipe-option { color: var(--ink); font: inherit; cursor: pointer; }
+.personal .data-note { line-height: 1.7; }
+.cook-main { color: #193b37; }
+.app-shell[data-device=fridge] .cook-main h1 { color: #193b37; }
+.cook-main .outline { color: #193b37 !important; background: #fff !important; }
+.changes .outline { margin-top: 14px; }
+.record-card footer { flex-wrap: wrap; }
+.record-card footer > .data-note { flex-basis: 100%; }
+.record-card footer .scenario-check { max-width: 100%; }
+.portion > div > .scenario-field { min-width: 0; }
+.scenario-section { margin-top: 20px; }
+.scenario-section > .outline { margin-top: 16px; }
+.scenario-log { padding: 14px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.scenario-log p { margin: 8px 0 0; font-size: .8rem; line-height: 1.6; }
+.scenario-log b { font-size: .88rem; }
+.insight .scenario-field { margin: 18px 0; }
+.insight .primary { margin: 10px 0; }
+#scenario-dialog { width: min(540px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; margin: auto; padding: 24px; border: 1px solid #cfdbd1; border-radius: 18px; background: #fffefa; color: #193b37; box-shadow: 0 18px 80px #0005; }
+#scenario-dialog::backdrop { background: #0d171b99; }
+.dialog-heading { display: flex; justify-content: space-between; align-items: start; gap: 18px; }
+.dialog-heading h2 { margin: 0 0 15px; font-size: 1.2rem; line-height: 1.4; }
+#dialog-close { flex-shrink: 0; width: 36px; height: 36px; border: 0; border-radius: 50%; background: #e9eee8; color: #193b37; font-size: 1.4rem; }
+#dialog-body .scenario-field, #dialog-body textarea { margin: 14px 0; }
+#dialog-body > button, #dialog-body form > button { margin: 8px 8px 8px 0; }
+#dialog-body .wide { display: block; }
+#dialog-body fieldset { margin: 18px 0; padding: 12px 16px; border: 1px solid #c5d3c7; border-radius: 10px; }
+#dialog-body legend { font-size: .85rem; font-weight: 750; }
+#dialog-body textarea { display: block; resize: vertical; }
+#dialog-body .data-note { color: #56695e; font-size: .78rem; line-height: 1.7; }
+.scenario-photo { display: block; width: 100%; max-height: 260px; object-fit: contain; border-radius: 12px; }
+#dialog-error { font-size: .85rem; line-height: 1.7; }
+.scenario-notice, .view, .card, .cook-ai, .cook-main, .record-card, .profile-grid { min-width: 0; }
+.view h1, .view h2, .household button, .scenario-field, .scenario-log { overflow-wrap: anywhere; }
+.toast { max-width: calc(100vw - 32px); white-space: normal; line-height: 1.6; bottom: 82px; }
+@media(max-width: 930px) { .reason-card { display: block; } .reason-card ul { margin: 22px 0; } }
+@media(max-width: 660px) {
+  .scenario-notice { padding: 12px 17px; align-items: start; flex-direction: column; gap: 6px; }
+  .scenario-controls { gap: 12px; }
+  .scenario-controls > .scenario-field { flex: 1 1 130px; }
+  .scenario-actions button, .scenario-section button { min-height: 44px; }
+  .record-card footer { align-items: stretch; }
+  .portion > div { grid-template-columns: 34px minmax(0,1fr) minmax(100px,1fr); }
+  .portion small { grid-column: 2 / -1; }
+  .scenario-check { max-width: 100%; }
+  #scenario-dialog { padding: 20px; }
+  .cook-layout { margin: 0; border-radius: 16px; }
+  .topbar { gap: 8px; }
+  .household { min-width: 0; }
+  .household .avatar { display: none; }
+}
+/* Layout additions for API-backed forms; preserve the existing shell and palette. */
+.view form { display: grid; gap: 16px; max-width: 620px; margin: 20px 0; }
+.view form > button { justify-self: start; }
+.view .scenario-section > button { margin: 8px 10px 8px 0; }
+.view .scenario-field:has(input[type=checkbox]) { display: flex; align-items: center; gap: 12px; }
+.view .scenario-field input[type=checkbox] { width: 22px; height: 22px; min-height: 22px; flex-shrink: 0; accent-color: #173e39; }
+.recipe-option { display: block; text-align: left; width: 100%; }
+.recipe-option h2 { font-size: 1.2rem; }
+.scenario-section .inventory-item { flex-wrap: wrap; }
+.scenario-section .inventory-item h2 { font-size: 1rem; }
+.scenario-section .inventory-item .data-note { overflow-wrap: anywhere; }
+[role=alert] { overflow-wrap: anywhere; }
+@media (max-width: 660px) { .view form { width: 100%; } .scenario-controls { align-items: stretch; } .scenario-controls > label { width: 100%; } }
+.reason-card .data-note { color: #e3e9e5; }
+/* Explicit surfaces: device mode owns the layout; viewport size only fits it. */
+html[data-device=fridge] { background: #080e10; color-scheme: dark; }
+html[data-device=mobile] { background: #e9eaed; color-scheme: light; }
+.app-shell { color: var(--ink); }
+.device-switch { display: flex; padding: 4px; gap: 3px; border: 1px solid var(--line); border-radius: 12px; }
+.device-switch button { min-height: 36px; padding: 7px 12px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; font-size: .76rem; font-weight: 750; white-space: nowrap; }
+.device-switch button[aria-pressed=true] { color: #fff; background: #c9003b; }
+.device-context { display: flex; justify-content: space-between; padding: 14px 30px; border-bottom: 1px solid var(--line); font-size: .74rem; color: var(--muted); }
+.device-context #device-label { color: var(--ink); font-weight: 800; letter-spacing: .03em; }
+.scenario-notice { color: var(--muted); }
+.stock-overview { position: relative; margin: 28px 0 4px; padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); }
+.stock-overview .data-note { margin: 12px 0 20px; }
+.home-dashboard { display: grid; gap: 20px; align-items: start; }
+.home-dashboard .card { margin-top: 20px; }
+.home-dashboard .members { gap: 12px; }
+.member { padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; min-width: 72px; min-height: 56px; align-content: center; font-size: .9rem; color: var(--muted); }
+.member.selected { color: var(--ink); border-color: var(--leaf); background: var(--mint); }
+.home-dashboard .ai-answer { margin: 16px 0 0; }
+.home-dashboard .ai-answer:empty { display: none; }
+.app-shell[data-device=mobile] { width: min(480px,100%); max-width: 480px; min-height: 100dvh; }
+.app-shell[data-device=mobile] .topbar { padding: 0 16px; gap: 8px; }
+.app-shell[data-device=mobile] .household { display: none; }
+.app-shell[data-device=mobile] .top-actions { margin-left: auto; }
+.app-shell[data-device=mobile] .device-context { padding: 12px 18px; }
+.app-shell[data-device=mobile] .scenario-notice { padding: 12px 18px; flex-direction: column; align-items: start; gap: 6px; }
+.app-shell[data-device=mobile] .view h1 { font-size: 2.4rem; line-height: 1.1; }
+.app-shell[data-device=mobile] .view { padding: 26px 18px 110px; }
+.app-shell[data-device=mobile] .home-dashboard { grid-template-columns: 1fr; gap: 0; }
+.app-shell[data-device=mobile] .stock-overview { background: #fff0f4; border-color: #efced7; }
+.app-shell[data-device=mobile] .member { flex: 1 1 88px; }
+.app-shell[data-device=mobile] .scenario-controls { display: grid; grid-template-columns: 1fr; }
+.app-shell[data-device=mobile] .recipe-hero, .app-shell[data-device=mobile] .recipe-columns, .app-shell[data-device=mobile] .inventory-grid { grid-template-columns: 1fr; }
+.app-shell[data-device=mobile] .recipe-option { min-width: 0; }
+.app-shell[data-device=mobile] .mobile-nav { width: min(480px,100%); padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+.app-shell[data-device=mobile] .scenario-warning { color: #8e2445; }
+.app-shell[data-device=fridge] { width: min(1120px,100%); max-width: 1120px; min-height: 100dvh; }
+.app-shell[data-device=fridge] .topbar { position: relative; height: 84px; }
+.app-shell[data-device=fridge] .wordmark { font-size: 1.4rem; }
+.app-shell[data-device=fridge] .view { max-width: none; padding: 38px 32px 125px; }
+.app-shell[data-device=fridge] .view h1 { font-size: clamp(2.4rem,4.5vw,3.5rem); line-height: 1.08; }
+.app-shell[data-device=fridge] .home-dashboard { grid-template-columns: 1fr 1fr; }
+.app-shell[data-device=fridge] .card { padding: 26px; }
+.app-shell[data-device=fridge] .stock-overview { background: linear-gradient(115deg,#273e3b,#172125); }
+.app-shell[data-device=fridge] .member { min-height: 76px; min-width: 86px; font-size: 1.05rem; }
+.app-shell[data-device=fridge] .member.selected { color: #fff; border-color: #ff7598; background: #6d223b; }
+.app-shell[data-device=fridge] .primary { min-height: 52px; padding: 14px 20px; color: #fff; background: #d62659; }
+.app-shell[data-device=fridge] .primary:hover { background: #b61b49; }
+.app-shell[data-device=fridge] .scenario-field { color: #e5ece8; }
+.app-shell[data-device=fridge] .scenario-field input, .app-shell[data-device=fridge] .scenario-field select { min-height: 50px; color: #f3f6f4; background: #142025; border-color: #6b827c; }
+.app-shell[data-device=fridge] .scenario-field input[type=checkbox] { min-height: 22px; }
+.app-shell[data-device=fridge] .scenario-notice { color: #c5d3ce; background: #172125; }
+.app-shell[data-device=fridge] .device-context { color: #c5d3ce; background: #111b1d; }
+.app-shell[data-device=fridge] .ai-answer { color: #eaf2ef; background: #183530; }
+.app-shell[data-device=fridge] .scenario-status { color: #e1eae5; }
+.app-shell[data-device=fridge] .scenario-status[data-state=api_error], .app-shell[data-device=fridge] .scenario-status[data-state=privacy_blocked], .app-shell[data-device=fridge] .scenario-status[data-state=stale_unvalidated] { color: #ffd7e3; background: #48202d; }
+.app-shell[data-device=fridge] .mobile-nav { width: min(1120px,100%); padding: 15px 32px calc(15px + env(safe-area-inset-bottom)); }
+.app-shell[data-device=fridge] .mobile-nav button { min-height: 48px; min-width: 80px; }
+@media (max-width: 760px) {
+ .app-shell[data-device=fridge] .home-dashboard { grid-template-columns: 1fr; gap: 0; }
+ .app-shell[data-device=fridge] .view { padding: 28px 20px 120px; }
+ .app-shell[data-device=fridge] .household { display: none; }
+ .app-shell[data-device=fridge] .topbar { padding: 0 20px; }
+ .app-shell[data-device=fridge] .top-actions { margin-left: auto; }
+ .app-shell[data-device=fridge] .wordmark { font-size: 1rem; }
+ .app-shell[data-device=fridge] .mobile-nav { padding-inline: 8px; }
+ .app-shell[data-device=fridge] .mobile-nav button { min-width: 52px; }
+}
+.app-shell[data-device=mobile] .members { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+/* Refrigerator home: communal meal dashboard, matching the approved concept. */
+.fridge-clock { display: none; }
+.meal-greeting { margin: 0 0 28px; }
+.greeting-subtitle { margin: 16px 0 0; color: var(--muted); font-size: 1.2rem; }
+.meal-hero { display: grid; grid-template-columns: 1fr 1fr; overflow: hidden; border: 1px solid var(--line); border-radius: 24px; background: #14201c url('/static/images/fridge-meal-hero.png') center/cover; color: #fff9ed; }
+.meal-hero-art { min-height: 360px; }
+.meal-hero-copy { padding: 40px 32px; align-self: center; }
+.view .meal-hero-copy h2 { white-space: pre-line; font-size: clamp(1.9rem,3.4vw,2.8rem); line-height: 1.22; letter-spacing: -.06em; color: #fff9ed; }
+.meal-hero-copy .data-note { font-size: 1rem; line-height: 1.6; color: #e4e9df; }
+.meal-hero-copy .hero-cta { display: block; width: 100%; margin: 24px 0 12px; font-size: 1.2rem; }
+.meal-hero-copy small { color: #b4c5ba; font-size: .65rem; }
+.family-widget, .stock-widget { position: relative; }
+.app-shell .family-widget .members { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; margin: 30px 0 24px; }
+.app-shell .family-widget .member { position: relative; display: flex; flex-direction: column; border: 0; padding: 0; background: transparent; min-width: 0; min-height: 100px; }
+.member-portrait { display: grid; place-items: center; width: 72px; height: 72px; border-radius: 50%; font-size: 2.5rem; background: #b5c2b6; border: 3px solid transparent; }
+.member.selected .member-portrait { border-color: #f35480; box-shadow: 0 0 0 3px #f3548022; }
+.member-check { display: none; position: absolute; right: 0; top: 0; border-radius: 50%; padding: 2px 5px; font-size: .8rem; color: #fff; background: #d62659; }
+.member.selected .member-check { display: block; }
+.stock-widget > .text-button { position: absolute; right: 24px; top: 24px; margin: 0; }
+.stock-row { display: flex; align-items: center; gap: 16px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+.stock-row:first-of-type { margin-top: 12px; }
+.stock-row > span:last-child { margin-left: auto; }
+.ingredient-symbol { font-size: 2rem; color: #bdc99f; width: 45px; text-align: center; }
+.meal-record-widget { margin-top: 22px; }
+.meal-status-row { display: flex; gap: 12px; align-items: center; margin-top: 20px; }
+.meal-status { flex: 1; display: grid; gap: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; }
+.meal-status span { font-size: .75rem; color: var(--muted); }
+.meal-status.done { background: #366346; }
+.meal-status.done span { color: #e2f2df; }
+.app-shell[data-device=fridge] .topbar { gap: 20px; }
+.app-shell[data-device=fridge] .fridge-clock { display: grid; text-align: right; gap: 3px; }
+.fridge-clock strong { font-size: 2rem; line-height: 1; letter-spacing: .02em; }
+.fridge-clock span { font-size: .75rem; color: var(--muted); }
+.app-shell[data-device=fridge] .device-context { display: none; }
+.app-shell[data-device=fridge] .scenario-notice { font-size: .65rem; padding-block: 8px; }
+.app-shell[data-device=fridge] .home-dashboard .card { margin-top: 0; min-height: 280px; }
+.app-shell[data-device=fridge] .home-dashboard { margin-top: 20px; }
+.app-shell[data-device=fridge] .family-widget > .data-note { padding-top: 16px; border-top: 1px solid var(--line); text-align: center; font-size: .9rem; }
+.app-shell[data-device=fridge] .meal-record-widget { padding: 24px; }
+.app-shell[data-device=mobile] .meal-hero { grid-template-columns: 1fr; background-image: none; }
+.app-shell[data-device=mobile] .meal-hero-art { min-height: 210px; background: url('/static/images/fridge-meal-hero.png') left center/160% auto; }
+.app-shell[data-device=mobile] .meal-hero-copy { padding: 24px; }
+.app-shell[data-device=mobile] .member-portrait { width: 58px; height: 58px; font-size: 2rem; }
+.app-shell[data-device=mobile] .member { font-size: .8rem; }
+.app-shell[data-device=mobile] .meal-status-row { flex-wrap: wrap; }
+.app-shell[data-device=mobile] .meal-status-row > button { width: 100%; }
+.app-shell[data-device=mobile] .meal-status { min-width: 70px; padding: 10px; }
+.app-shell[data-device=mobile] .meal-status.done { background: #e6f0df; }
+.app-shell[data-device=mobile] .meal-status.done span { color: #245332; }
+@media(max-width:760px) {
+ .app-shell[data-device=fridge] .meal-hero-copy { padding: 24px 18px; }
+ .app-shell[data-device=fridge] .meal-hero-art { min-height: 290px; }
+ .app-shell[data-device=fridge] .meal-hero-copy h2 { font-size: 1.7rem; }
+ .app-shell[data-device=fridge] .fridge-clock { display: none; }
+ .app-shell[data-device=fridge] .meal-status-row { flex-wrap: wrap; }
+ .app-shell[data-device=fridge] .meal-status-row > button { width: 100%; }
+ .app-shell[data-device=fridge] .member-portrait { width: 58px; height: 58px; font-size: 2rem; }
+}
+.app-shell[data-device=fridge] .family-widget .member.selected { background: transparent; }
