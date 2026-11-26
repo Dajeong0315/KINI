@@ -14,11 +14,18 @@ from .local_identity import authorize
 
 def _begin_write(db):
     # SQLite needs its immediate writer lock; PostgreSQL rejects that syntax.
-    db.execute('BEGIN' if db.__class__.__module__.startswith('app.services') else 'BEGIN IMMEDIATE')
+    db.execute('BEGIN' if _is_postgres(db) else 'BEGIN IMMEDIATE')
 
 
 def _is_postgres(db):
     return getattr(db, 'is_postgres', False)
+
+
+def _lock_event(db, event_id, household):
+    query = 'SELECT * FROM inventory_events WHERE id=? AND household_id=?'
+    if _is_postgres(db):
+        query += ' FOR UPDATE'
+    return db.execute(query, (event_id, household)).fetchone()
 
 
 class DetectionEvent(BaseModel):
@@ -69,7 +76,7 @@ def ingest(db, token, payload):
             old = db.execute('SELECT * FROM inventory_events WHERE household_id=? AND client_event_id=?',
                              (household, str(obj.client_event_id))).fetchone()
             if old['payload_sha256'] != fingerprint:
-                raise EventConflict('duplicate client_event_id has different content')
+                raise EventConflict('같은 이벤트 ID의 내용이 다릅니다.')
             return _event_result(old)
         old = db.execute('SELECT * FROM inventory_events WHERE household_id=? AND client_event_id=?',
                          (household, str(obj.client_event_id))).fetchone()
@@ -92,10 +99,7 @@ def confirm(db, token, event_id, payload):
         _begin_write(db)
         identity = authorize(db, token, write=True)
         household = identity['household_id']
-        event_query = 'SELECT * FROM inventory_events WHERE id=? AND household_id=?'
-        if _is_postgres(db):
-            event_query += ' FOR UPDATE'
-        event = db.execute(event_query, (event_id, household)).fetchone()
+        event = _lock_event(db, event_id, household)
         if not event:
             raise LookupError('이벤트를 찾을 수 없습니다.')
         if event['status'] == 'applied':
@@ -153,7 +157,7 @@ def reject(db, token, event_id):
     with db:
         _begin_write(db)
         household = authorize(db, token, write=True)['household_id']
-        event = db.execute('SELECT * FROM inventory_events WHERE id=? AND household_id=?', (event_id, household)).fetchone()
+        event = _lock_event(db, event_id, household)
         if not event:
             raise LookupError('이벤트를 찾을 수 없습니다.')
         if event['status'] == 'applied':

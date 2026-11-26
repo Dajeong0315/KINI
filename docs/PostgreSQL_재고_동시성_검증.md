@@ -2,34 +2,41 @@
 
 ## 범위
 
-`inventory_events.confirm()`의 PostgreSQL 경로에 이벤트 행 `FOR UPDATE` 잠금과 출고 재고 행 `FOR UPDATE` 잠금을 적용했다. 출고 UPDATE에도 가구·재료·잔량 조건을 넣어 부족 재고가 차감되지 않게 했다. `ingest()`는 `(household_id, client_event_id)` 유일 제약과 `ON CONFLICT DO NOTHING`으로 같은 내용의 동시 접수를 idempotent하게 처리하고, 다른 내용은 기존 `EventConflict` 계약으로 거부한다. SQLite의 `BEGIN IMMEDIATE` 경로와 API 응답은 유지한다.
+`confirm()`과 `reject()`는 가구에 속한 동일 이벤트 행을 `FOR UPDATE`로 잠근다. 먼저 완료한 요청의 상태를 두 번째 요청이 읽으므로 확정 뒤 거절하거나 거절 뒤 확정할 수 없다. 출고는 그다음 재고 행을 잠그고 잔량을 읽는다. 출고 UPDATE는 가구·재료·잔량 조건도 검사한다. `ingest()`는 기존 `(household_id, client_event_id)` 유일 제약과 `ON CONFLICT DO NOTHING`으로 중복 접수를 처리한다. SQLite는 `BEGIN IMMEDIATE`를 사용한다.
 
 변경된 연결 adapter는 PostgreSQL 식별자와 UPDATE `rowcount`만 제공한다. 스키마의 이벤트 유일 제약과 변경 이력의 `event_id` primary key를 그대로 사용한다.
 
 ## 재현 환경과 명령
 
-무료 로컬 Docker PostgreSQL 16 Alpine 일회성 컨테이너(`kini-pg-concurrency`, host port `55432`), 합성 household/ingredient/item만 사용했다. Supabase/AWS, 외부 AI, 실제 migration 대상 DB는 사용하지 않았다.
+저장소 루트에서 Docker와 프로젝트 Python 환경으로 실행한다.
 
 ```powershell
-docker run -d --name kini-pg-concurrency -e POSTGRES_PASSWORD=test -e POSTGRES_DB=kini_test -p 55432:5432 postgres:16-alpine
-$env:KINI_DB_BACKEND='postgres'
-$env:KINI_DATABASE_URL='postgresql://postgres:test@127.0.0.1:55432/kini_test'
-python scripts/run_migrations.py
-python -m pytest -q tests/test_postgres_inventory_concurrency.py tests/test_postgres_integration.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test_vision_postgres.ps1
 ```
 
-동시성 시험은 각 worker가 `open_db()`로 독립 PostgreSQL 연결을 열고 `threading.Barrier`에서 동시에 출발했다. 실행 결과는 5 passed이며, 서버는 `pg_isready`에서 `/var/run/postgresql:5432 - accepting connections`로 확인했다. 시험은 다음을 각각 1회 실행했다: 같은 이벤트 동시 확정, 서로 다른 이벤트의 700g+700g 출고(1건 반영·300g 잔량), 범위 내 400g+300g 동시 출고(2건 반영·300g 잔량), 같은 `client_event_id` 동시 접수 및 다른 내용 충돌.
+스크립트는 임의의 루프백 포트와 메모리 파일시스템으로 일회성 DB를 띄우고, `scripts/run_migrations.py`를 명시적으로 실행한 다음 생성한 컨테이너를 정리한다. 합성 데이터만 적재한다. PostgreSQL 16.15에서 64개가 통과했다. HTTP 시험도 DB 연결에서 `SELECT version()`과 migration 적용 여부를 검사한다.
 
-실패 경로는 부족 재고 예외 후 재고·이벤트 pending 상태·변경 이력·버전이 함께 보존되는 기존 테스트와 PostgreSQL 권한/rollback 경계 테스트로 확인했다. viewer 쓰기 차단 및 다른 household 접근 차단도 기존 PostgreSQL 통합 시험에서 확인했다.
+실제 PostgreSQL 서비스 수준 경쟁 시험은 요청마다 독립 DB 연결을 열고 두 worker를 barrier에서 동시에 출발시킨다. 각 시나리오를 새 합성 상태에서 10회 실행했으며 실패 재시도는 없다.
 
-SQLite 회귀:
+| 시나리오 | 통과 | 검사 |
+| --- | ---: | --- |
+| 같은 이벤트와 같은 확정 내용 | 10/10 | 두 응답 일치, 반영 1회 |
+| 같은 이벤트와 다른 확정 내용 | 10/10 | 성공 1건, 충돌 1건, 이력·버전 1건 |
+| 확정과 거절 | 10/10 | 확정 승리 시 차감 1회, 거절 승리 시 재고 불변 |
+| 1,000g에서 700g씩 출고 | 10/10 | 1건만 반영, 잔량 300g, 실패 이벤트 대기 유지 |
+| 1,000g에서 400g과 300g 출고 | 10/10 | 처리 순서와 관계없이 잔량 300g, 이력의 전후 수량 연결, 버전 2 |
+| 동일 UUID 동시 접수 | 10/10 | 대기 1건, 재고 불변, 다른 내용 재접수 충돌 |
+
+기존 PostgreSQL 저장·권한 시험 1개와 실제 루프백 HTTP 시험 3개도 통과했다. HTTP 롤백 시험은 버전 UPDATE 직후 PostgreSQL 트리거로 오류를 발생시켜 재고·이벤트·변경 이력·버전이 모두 원복되는지 확인한다.
+
+SQLite와 Vision 클라이언트 회귀는 별도 실행한다.
 
 ```powershell
-Remove-Item Env:KINI_DB_BACKEND,Env:KINI_DATABASE_URL -ErrorAction SilentlyContinue
-python -m pytest -q tests/test_inventory_events.py
+$env:KINI_DB_BACKEND = 'sqlite'
+python -m pytest -q tests/test_inventory_events.py tests/test_kini_inventory_client.py tests/test_step1_postgres_boundary.py
 ```
 
-결과: `11 passed`.
+43개가 통과했다. 재고 이벤트 11개, Vision 클라이언트 30개, PostgreSQL 설정 경계 2개를 포함한다.
 
 ## 남은 한계
 
