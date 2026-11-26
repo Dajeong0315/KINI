@@ -27,6 +27,13 @@ class NutritionRecord:
     cache_status: str | None = None
 
 
+def catalog_context(db):
+    row = db.execute("""SELECT a.release_id,a.cache_version,s.rights_status,r.status
+        FROM active_data_releases a JOIN catalog_data_sources s ON s.code=a.source_code
+        JOIN data_releases r ON r.id=a.release_id WHERE a.source_code='mfds_nutrition'""").fetchone()
+    return list(row) if row else None
+
+
 class RecommendationNutritionProvider:
     """One contract for catalog, imported-official and demo nutrition data."""
 

@@ -227,11 +227,15 @@ def create_recommendation():
 
 @api.get('/api/recommendations/<int:request_id>')
 def get_recommendation(request_id):
+    from .recommendation_provider import catalog_context
     with open_db() as db:
         row=db.execute('SELECT result_json,nutrition_data_release_id,allergen_reference_version_id FROM recommendation_requests WHERE id=?',(request_id,)).fetchone()
         pointer=db.execute('SELECT nutrition_release_id,allergen_reference_version_id FROM data_release_pointers WHERE id=1').fetchone()
+        current_catalog = catalog_context(db)
     if not row: return jsonify({'error':'추천 요청을 찾을 수 없습니다.'}),404
     result=json.loads(row[0])
+    if result.pop('_catalog_context', None) != current_catalog and result.get('status') == 'recommendations_available':
+        result.update(status='stale_unvalidated', recommendations=[], requires_confirmation=True)
     if result.get('status') == 'recommendations_available' and not result.get('ai_explanation'):
         result.update({'status':'stale_unvalidated','recommendations':[], 'requires_confirmation':True, 'message':'저장된 추천은 현재 정보로 다시 검증해야 합니다. 다시 추천받아 주세요.'})
     if 'data_quality' not in result:

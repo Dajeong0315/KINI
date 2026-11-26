@@ -66,3 +66,22 @@ def test_catalog_cache_failure_falls_back_to_catalog_database(monkeypatch, db):
     db.commit()
     assert RecommendationNutritionProvider(BrokenCatalog()).get(db, 2,
         db.execute('SELECT i.*,n.source_type nutrition_source,n.basis_amount_g FROM ingredients i JOIN ingredient_nutrition n ON n.ingredient_id=i.id WHERE i.id=2').fetchone()) is None
+
+
+def test_publishing_new_catalog_invalidates_saved_candidate(db, monkeypatch):
+    monkeypatch.setenv('KINI_DB_PATH', db.execute('PRAGMA database_list').fetchone()['file'])
+    monkeypatch.setenv('KINI_USE_OPENAI','0')
+    from app.main import app
+    client = app.test_client()
+    rec = client.post('/api/recommendations',json=request()).json
+    meal = client.post('/api/meal-sessions',json=request()).json
+    row = dict(external_id="F2",kind="food",name="fixture",basis_amount=100,basis_unit="g",
+               nutrients={"protein_g":5})
+    release = stage(db,'mfds_nutrition',[row],source_revision="next")
+    assert not validate(db,release)
+    publish(db,release)
+    saved = client.get(f"/api/recommendations/{rec['request_id']}").json
+    assert saved['status']=='stale_unvalidated' and saved['recommendations']==[]
+    assert client.post('/api/cooking-sessions',json={'meal_session_id':meal['session_id'],
+        'recipe_id':rec['recommendations'][0]['recipe_id'],
+        'recommendation_request_id':rec['request_id']}).status_code==400
