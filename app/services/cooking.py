@@ -1,5 +1,6 @@
 """Validated cooking drafts; all ingredient quantities are recipe-total grams."""
 import json
+import math
 from collections import defaultdict
 from datetime import date, datetime
 from .freshness import assess_inventory
@@ -32,14 +33,14 @@ def validate(db, session):
     recipe = db.execute('SELECT servings FROM recipes WHERE id=?', (session['recipe_id'],)).fetchone()
     ids = [r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=? ORDER BY member_id', (session['meal_session_id'],))]
     portions = session.get('planned_servings') or recipe['servings']
-    if not portions or portions <= 0: raise ValueError('조리 인분 확인이 필요합니다.')
+    if not portions or not math.isfinite(portions) or portions <= 0: raise ValueError('조리 인분 확인이 필요합니다.')
     people = members(db, session['household_id'], ids)
     if not people or len(people)!=len(ids): raise ValueError('식사 참여자 정보가 부족합니다.')
     weighted_rows = []
     if not session['ingredients']: raise ValueError('재료가 없습니다.')
     for entry in session['ingredients']:
         item = db.execute('SELECT i.*,n.energy_kcal,n.protein_g,n.carbohydrate_g,n.fat_g,n.sodium_mg FROM ingredients i LEFT JOIN ingredient_nutrition n ON n.ingredient_id=i.id WHERE i.id=?',(entry['ingredient_id'],)).fetchone()
-        if not item or entry['quantity_g'] <= 0: raise ValueError('재료 수량 또는 영양 정보 확인이 필요합니다.')
+        if not item or entry['quantity_g'] is None or not math.isfinite(entry['quantity_g']) or entry['quantity_g'] <= 0: raise ValueError('재료 수량 또는 영양 정보 확인이 필요합니다.')
         for person in people:
             if item['name'] in person['allergies'] or item['category'] in person['allergies']: raise ValueError('참여자 알레르기 재료는 사용할 수 없습니다.')
             for constraint in person['constraints']:
@@ -48,7 +49,8 @@ def validate(db, session):
         inventory = [dict(r) for r in db.execute('SELECT * FROM inventory_items WHERE household_id=? AND ingredient_id=?',(session['household_id'],item['id']))]
         codes,_,quality=inspect_ingredient(db,item['id'],people,inventory,RecommendationNutritionProvider())
         if codes: raise ValueError('재료의 알레르기, 라벨 또는 영양 정보 확인이 필요합니다.')
-        guideline_row=db.execute('SELECT * FROM ingredient_storage_guidelines WHERE ingredient_id=? ORDER BY rowid DESC LIMIT 1',(item['id'],)).fetchone()
+        guideline_order = 'id' if getattr(db, 'is_postgres', False) else 'rowid'
+        guideline_row=db.execute(f'SELECT * FROM ingredient_storage_guidelines WHERE ingredient_id=? ORDER BY {guideline_order} DESC LIMIT 1',(item['id'],)).fetchone()
         guideline=dict(guideline_row) if guideline_row else None
         if any(not assess_inventory(x,guideline=guideline)['usable'] for x in inventory): raise ValueError('재료의 상태 또는 소비기한 확인이 필요합니다.')
         weighted_rows.append((quality, entry['quantity_g'] / portions))
@@ -67,6 +69,10 @@ def create(db, obj):
     stored = json.loads(request['result_json'])
     if stored.get('_catalog_context') != catalog_context(db):
         raise ValueError('카탈로그가 변경됐습니다. 다시 추천받아 주세요.')
+    pointer = db.execute('SELECT nutrition_release_id,allergen_reference_version_id FROM data_release_pointers WHERE id=1').fetchone()
+    if pointer and (stored.get('nutrition_data_release_id') != pointer['nutrition_release_id'] or
+                    stored.get('allergen_reference_version_id') != pointer['allergen_reference_version_id']):
+        raise ValueError('공식 데이터가 변경됐습니다. 다시 추천받아 주세요.')
     if stored.get('status') != 'recommendations_available' or not stored.get('ai_explanation'): raise ValueError('확인된 추천이 아닙니다.')
     ids = {r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=?',(obj.meal_session_id,))}
     if ids != set(json.loads(request['request_json'])['participant_ids']): raise ValueError('추천과 식사 참여자가 일치해야 합니다.')
@@ -74,9 +80,11 @@ def create(db, obj):
     ingredients = [dict(r) for r in db.execute('SELECT ingredient_id,quantity_g FROM recipe_ingredients WHERE recipe_id=? ORDER BY ingredient_id',(obj.recipe_id,))]
     draft={'recipe_id':obj.recipe_id,'meal_session_id':obj.meal_session_id,'household_id':meal['household_id'],'ingredients':ingredients}
     base = db.execute('SELECT servings FROM recipes WHERE id=?',(obj.recipe_id,)).fetchone()[0]
-    if not base or base <= 0: raise ValueError('레시피 인분 확인이 필요합니다.')
+    if not base or not math.isfinite(base) or base <= 0: raise ValueError('레시피 인분 확인이 필요합니다.')
     draft['planned_servings'] = len(ids)
     for entry in ingredients:
+        if entry['quantity_g'] is None or not math.isfinite(entry['quantity_g']) or entry['quantity_g'] <= 0:
+            raise ValueError('재료 중량 확인이 필요합니다.')
         entry['quantity_g'] *= len(ids) / base
     validate(db,draft)
     cur=db.execute('INSERT INTO cooking_sessions(household_id,meal_session_id,request_id,recipe_id,ingredients_json,planned_servings) VALUES (?,?,?,?,?,?)',(meal['household_id'],obj.meal_session_id,obj.recommendation_request_id,obj.recipe_id,json.dumps(ingredients),len(ids)))
@@ -84,6 +92,8 @@ def create(db, obj):
 
 
 def change(db, session_id, obj):
+    if getattr(db, 'is_postgres', False):
+        db.execute('SELECT id FROM cooking_sessions WHERE id=? FOR UPDATE', (session_id,)).fetchone()
     session=state(db,session_id)
     if session['status']!='active': raise ValueError('완료된 조리 세션은 수정할 수 없습니다.')
     ingredient=db.execute('SELECT id FROM ingredients WHERE name=?',(obj.ingredient,)).fetchone()
