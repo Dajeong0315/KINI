@@ -8,13 +8,14 @@ from .personalization import aggregate, score_personalization
 from .freshness import assess_inventory
 from .recommendation_llm import PROMPT_VERSION
 from .data_quality import inspect_ingredient
-from .recommendation_provider import RecommendationNutritionProvider
+from .recommendation_provider import RecommendationNutritionProvider, per_serving_nutrition, catalog_context
 
 RULES_VERSION='1.3-data-quality'
 NUTRIENTS=('energy_kcal','protein_g','carbohydrate_g','fat_g','sodium_mg')
 
 def recommend(db, req, *, persist=True):
     nutrition_provider = RecommendationNutritionProvider()
+    initial_catalog = catalog_context(db)
     release_pointer=db.execute('SELECT nutrition_release_id,allergen_reference_version_id FROM data_release_pointers WHERE id=1').fetchone()
     nutrition_release_id=release_pointer['nutrition_release_id'] if release_pointer else None
     allergen_reference_version_id=release_pointer['allergen_reference_version_id'] if release_pointer else None
@@ -69,7 +70,7 @@ def recommend(db, req, *, persist=True):
                 for c in p['constraints']:
                     if c['kind']=='excluded_ingredient' and c['value'] in (name,item['category']): reasons.append(f'{name}: 식이 제한'); reason_codes.append('dietary_constraint')
         if not ingredients: reasons.append('영양 정보 부족'); reason_codes.append('nutrition_unknown')
-        nutrition={n:round(sum((q[n] or 0)*x['quantity_g']/q['basis_amount_g'] for x,q in zip(ingredients,qualities) if x['quantity_g'] is not None and math.isfinite(x['quantity_g']) and q['basis_amount_g'] and math.isfinite(q['basis_amount_g']) and q['basis_amount_g']>0)/recipe['servings'],2) for n in NUTRIENTS} if len(ingredients)==len(qualities) else {n:0 for n in NUTRIENTS}
+        nutrition = per_serving_nutrition((q, x['quantity_g']/recipe['servings']) for x,q in zip(ingredients,qualities)) if not reasons else dict.fromkeys(NUTRIENTS, 0)
         for p in people:
             for c in p['constraints']:
                 if c['kind']=='meal_sodium_max_mg' and nutrition['sodium_mg']>float(c['value']): reasons.append('식사 나트륨 제한 초과'); reason_codes.append('health_constraint')
@@ -116,6 +117,7 @@ def recommend(db, req, *, persist=True):
     if candidates: validated_constraint_codes.append('nutrition:locally_validated')
     result={'rules_version':RULES_VERSION,'prompt_version':PROMPT_VERSION,'db_version':db.execute("SELECT value FROM metadata WHERE key='db_version'").fetchone()[0], 'input_snapshot_hash':fingerprint, 'participant_ids':ids,'profile_snapshot':people,'inventory_snapshot':inventory,'recommendations':candidates[:3],'excluded':excluded,'as_of':today,'nutrition_data_release_id':nutrition_release_id,'allergen_reference_version_id':allergen_reference_version_id,'data_provenance_summary':provenance,'validated_constraint_codes':sorted(set(validated_constraint_codes))}
     result.update({'status':'recommendations_available' if candidates else 'no_safe_recommendation', 'data_quality':'demo_data' if any(c['data_quality']=='demo_data' for c in candidates[:3]) else 'confirmation_required' if not candidates or any(c['requires_confirmation'] for c in candidates[:3]) else 'verified', 'requires_confirmation':not candidates or any(c['requires_confirmation'] for c in candidates[:3]), 'warnings':sorted({w for c in candidates[:3] for w in c['warnings']}), 'excluded_candidates':excluded})
+    result['_catalog_context'] = initial_catalog
     return persist_recommendation(db, req, result) if persist else result
 
 
@@ -126,7 +128,9 @@ def persist_recommendation(db, req, result):
     with db:
         cur=db.execute('INSERT INTO recommendation_requests(household_id,request_json,result_json,nutrition_data_release_id,allergen_reference_version_id) VALUES (?,?,?,?,?)',(req['household_id'],json.dumps(req,ensure_ascii=False),'',result.get('nutrition_data_release_id'),result.get('allergen_reference_version_id')))
         result['request_id']=cur.lastrowid
-        db.execute('UPDATE recommendation_requests SET result_json=? WHERE id=?',(json.dumps(result,ensure_ascii=False),cur.lastrowid))
+        stored = dict(result)
+        result.pop('_catalog_context', None)
+        db.execute('UPDATE recommendation_requests SET result_json=? WHERE id=?',(json.dumps(stored,ensure_ascii=False),cur.lastrowid))
         db.executemany('INSERT INTO recommendation_candidates VALUES (?,?,?,?)',[(cur.lastrowid,c['recipe_id'],i,json.dumps(c,ensure_ascii=False)) for i,c in enumerate(candidates,1)])
         db.executemany("INSERT INTO recommendation_feedback(recommendation_request_id,candidate_recipe_id,action) VALUES (?,?,'shown')", [(cur.lastrowid,c['recipe_id']) for c in candidates])
     return result
