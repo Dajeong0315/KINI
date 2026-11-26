@@ -8,11 +8,13 @@ from .personalization import aggregate, score_personalization
 from .freshness import assess_inventory
 from .recommendation_llm import PROMPT_VERSION
 from .data_quality import inspect_ingredient
+from .recommendation_provider import RecommendationNutritionProvider
 
 RULES_VERSION='1.3-data-quality'
 NUTRIENTS=('energy_kcal','protein_g','carbohydrate_g','fat_g','sodium_mg')
 
 def recommend(db, req, *, persist=True):
+    nutrition_provider = RecommendationNutritionProvider()
     release_pointer=db.execute('SELECT nutrition_release_id,allergen_reference_version_id FROM data_release_pointers WHERE id=1').fetchone()
     nutrition_release_id=release_pointer['nutrition_release_id'] if release_pointer else None
     allergen_reference_version_id=release_pointer['allergen_reference_version_id'] if release_pointer else None
@@ -42,7 +44,7 @@ def recommend(db, req, *, persist=True):
         reasons=[]; reason_codes=[]; warnings=[]; qualities=[]; usage=[]; missing=0; urgency=0
         for item in ingredients:
             name=item['name']; matching=[x for x in inventory if x['ingredient_id']==item['id']]
-            codes, item_warnings, quality=inspect_ingredient(db,item['id'],people,matching)
+            codes, item_warnings, quality=inspect_ingredient(db,item['id'],people,matching,nutrition_provider)
             reason_codes.extend(codes); warnings.extend(item_warnings)
             if quality: qualities.append(quality)
             if codes: reasons.extend({'allergen_conflict':f'{name}: 알레르기','label_confirmation_required':f'{name}: 성분표 확인 필요','nutrition_unknown':f'{name}: 영양 정보 부족','ingredient_unknown':f'{name}: 재료 정보 부족'}.get(code,code) for code in codes)
@@ -58,13 +60,15 @@ def recommend(db, req, *, persist=True):
             missing+=max(0,needed-available)
             priority=max((assessment['priority'] for _,assessment in assessed if assessment['usable']),default=0)
             urgency+=priority*min(needed/available,1) if available else 0
-            usage.append({'ingredient':name,'needed_g':round(needed,2),'available_g':available,'priority':priority, 'uncertainty_flags':sorted({flag for _,assessment in assessed for flag in assessment['flags']})})
+            usage.append({'ingredient':name,'needed_g':round(needed,2),'available_g':available,'priority':priority,
+                          'nutrition_source': quality.get('nutrition_source') if quality else None,
+                          'uncertainty_flags':sorted({flag for _,assessment in assessed for flag in assessment['flags']})})
             if name in req.get('excluded_ingredients',[]): reasons.append(f'{name}: 사용자 제외'); reason_codes.append('user_exclusion')
             for p in people:
                 if name in p['allergies'] or item['category'] in p['allergies']: reasons.append(f'{name}: 알레르기')
                 for c in p['constraints']:
                     if c['kind']=='excluded_ingredient' and c['value'] in (name,item['category']): reasons.append(f'{name}: 식이 제한'); reason_codes.append('dietary_constraint')
-        if not ingredients or any(any(x[n] is None for n in NUTRIENTS) for x in ingredients): reasons.append('영양 정보 부족'); reason_codes.append('nutrition_unknown')
+        if not ingredients: reasons.append('영양 정보 부족'); reason_codes.append('nutrition_unknown')
         nutrition={n:round(sum((q[n] or 0)*x['quantity_g']/q['basis_amount_g'] for x,q in zip(ingredients,qualities) if x['quantity_g'] is not None and math.isfinite(x['quantity_g']) and q['basis_amount_g'] and math.isfinite(q['basis_amount_g']) and q['basis_amount_g']>0)/recipe['servings'],2) for n in NUTRIENTS} if len(ingredients)==len(qualities) else {n:0 for n in NUTRIENTS}
         for p in people:
             for c in p['constraints']:
@@ -86,7 +90,7 @@ def recommend(db, req, *, persist=True):
         score=round(sum(a*b for a,b in zip(weights,(inv,balance,primary,secondary,pref,feasibility,variety))),4)
         personal_score, applied, ignored = score_personalization(db, req['household_id'], people, recipe, ingredients, today)
         score = round(score + personal_score, 4)
-        official_used=any(q.get('nutrition_source')=='official_imported' for q in qualities)
+        official_used=any(q.get('nutrition_source') in ('official_imported','catalog_published') for q in qualities)
         candidates.append({'recipe_id':recipe['id'],'name':recipe['name'],'cook_time_minutes':recipe['cook_time_minutes'],'nutrition_per_serving':nutrition,'nutrition_confidence':'official imported (explicit mapping)' if official_used else '데모 추정치','inventory_usage':usage,'scores':{'inventory':round(inv,2),'nutrition_balance':round(balance,2),'primary_strategy':round(primary,2),'secondary_strategy':round(secondary,2),'preference':pref,'feasibility':round(feasibility,2),'variety':variety,'total':score},'purchase_missing_g':round(missing,2),'adjustments':[{'member_id':p['id'],'servings':1,'sauce':'기본 분량','topping':'기본 구성','nutrition':nutrition,'remaining_targets':remaining[p['id']]} for p in people]})
         candidates[-1].update({'personalization_score':personal_score, 'applied_preference_signals':applied, 'ignored_preference_signals':ignored, 'explanation_facts':{'personalization_score':personal_score, 'preference_signals':applied}, 'recommendation_reason_codes':['PERSONALIZED'] if applied else []})
         quality_status='demo_data' if any(q['source_type']=='demo' or q['nutrition_source']=='demo' for q in qualities) else 'confirmation_required' if warnings else 'verified'
@@ -100,7 +104,10 @@ def recommend(db, req, *, persist=True):
     snapshot['allergen_tags']=[dict(r) for r in db.execute('SELECT * FROM ingredient_allergen_tags ORDER BY ingredient_id,allergen_code')]
     snapshot['allergen_aliases']=[dict(r) for r in db.execute('SELECT * FROM allergen_aliases ORDER BY alias')]
     fingerprint=hashlib.sha256(json.dumps(snapshot,sort_keys=True,ensure_ascii=False).encode('utf-8')).hexdigest()
-    provenance='published official nutrition is available only through explicit approved mappings' if nutrition_release_id else 'demo/local nutrition; not official data'
+    catalog_count=sum(1 for c in candidates for q in c.get('inventory_usage', []) if q.get('nutrition_source')=='catalog_published')
+    provenance=('approved published public catalog and explicit ingredient links' if catalog_count else
+                'published official nutrition is available only through explicit approved mappings' if nutrition_release_id else
+                'demo/local nutrition; not official data')
     validated_constraint_codes=[]
     for raw_ingredient in req.get('excluded_ingredients',[]):
         if not isinstance(raw_ingredient,str): continue
