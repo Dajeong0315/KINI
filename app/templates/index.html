@@ -1,158 +1,57 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#173e39" />
+    <meta name="theme-color" content="#f7f7ef" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta
-      name="apple-mobile-web-app-status-bar-style"
-      content="black-translucent"
-    />
-    <link
-      rel="manifest"
-      href="{{ url_for('static', filename='manifest.webmanifest') }}"
-    />
-    <title>식탁의 기준 · AI 영양 관리 파트너</title>
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='style.css') }}"
-    />
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='scenario.css') }}"
-    />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}" />
+    <title>KINI · 우리 가족의 영양사</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='scenario.css') }}" />
   </head>
   <body>
-    <main
-      class="app-shell"
-      id="app-shell"
-      data-device="{{ device_mode|default('auto') }}"
-    >
+    <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+    <div class="app-shell" id="app-shell" data-device="{{ device_mode|default('auto') }}">
       <header class="topbar">
-        <a class="wordmark" href="#home" data-view-link="home"
-          ><span class="wordmark-mark">◒</span>식탁의 기준</a
-        >
-        <div class="household">
-          <span class="avatar mint">⌂</span
-          ><button type="button" id="household-settings">가족 조회 중</button>
-        </div>
-        <div class="fridge-clock">
-          <strong id="home-time"></strong><span id="home-date"></span>
-        </div>
-        <div class="top-actions">
-          <button
-            class="notice"
-            id="notice-button"
-            type="button"
-            aria-label="알림"
-          >
-            ⌁
+        <a class="wordmark" href="#home" data-view-link="home" aria-label="KINI 홈">
+          <span class="wordmark-mark" aria-hidden="true"></span><span>KINI</span>
+        </a>
+        <span class="tagline">우리 가족의 영양사</span>
+        <div class="header-actions">
+          <span id="dataset-badge" class="badge" hidden>예시 데이터</span>
+          <button type="button" id="household-settings" class="outline" data-view-link="profile">
+            <span class="ui-icon icon-family" aria-hidden="true"></span>가족 관리
           </button>
-          <nav class="device-switch" id="device-toggle" aria-label="화면 선택">
-            <button
-              type="button"
-              data-device-choice="fridge"
-              aria-pressed="false"
-            >
-              냉장고
-            </button>
-            <button
-              type="button"
-              data-device-choice="mobile"
-              aria-pressed="false"
-            >
-              모바일 앱
-            </button>
-          </nav>
         </div>
       </header>
-      <div class="device-context">
-        <span id="device-label">화면 준비 중</span><span>식탁의 기준</span>
-      </div>
-      <aside class="scenario-notice">
-        <span
-          ><b>로컬 API 연결</b> · 서버에 기록합니다. 서버의 예시 데이터는 별도
-          표시합니다. 실제 민감정보는 입력하지 마세요.</span
-        ><button type="button" class="text-button" id="demo-tools">
-          연결 새로고침
-        </button>
-      </aside>
       <div class="app-layout">
-        <nav class="sidebar" aria-label="주 메뉴">
-          <button class="nav-item active" type="button" data-view-link="home">
-            ⌂ <span>오늘</span>
-          </button>
-          <button class="nav-item" type="button" data-view-link="recommend">
-            ✦ <span>메뉴 추천</span>
-          </button>
-          <button class="nav-item" type="button" data-view-link="inventory">
-            ▦ <span>냉장고</span>
-          </button>
-          <button class="nav-item" type="button" data-view-link="report">
-            ◔ <span>리포트</span>
-          </button>
-          <button class="nav-item" type="button" data-view-link="profile">
-            ◌ <span>가족·프로필</span>
-          </button>
-          <div class="side-note">
-            <b>가족 식사, 한 번에</b>
-            <p>
-              로컬 서버에 기록합니다. 인증·프로필 편집·ThinQ 연동은 준비
-              중입니다.
-            </p>
-          </div>
+        <nav class="sidebar" aria-label="주요 메뉴">
+          <button class="nav-item active" type="button" data-view-link="home"><span class="ui-icon icon-home" aria-hidden="true"></span>홈</button>
+          <button class="nav-item" type="button" data-view-link="inventory"><span class="ui-icon icon-inventory" aria-hidden="true"></span>식재료</button>
+          <button class="nav-item" type="button" data-view-link="recommend"><span class="ui-icon icon-menu" aria-hidden="true"></span>메뉴 추천</button>
+          <button class="nav-item" type="button" data-view-link="report"><span class="ui-icon icon-chart" aria-hidden="true"></span>영양 관리</button>
         </nav>
-        <section class="content">
-          <section class="view active" data-view="home">
-            <p class="data-note">로컬 API 연결 준비 중…</p>
-          </section>
-
-          <section class="view" data-view="recommend">
-            <p class="data-note">로컬 API 연결 준비 중…</p>
-          </section>
-
-          <section class="view" data-view="recipe">
-            <p class="data-note">로컬 API 연결 준비 중…</p>
-          </section>
-
-          <section class="view" data-view="cook">
-            <p class="data-note">로컬 API 연결 준비 중…</p>
-          </section>
-
-          <section class="view" data-view="record">
-            <p class="data-note">로컬 API 연결 준비 중…</p>
-          </section>
-
-          <section class="view" data-view="inventory">
-            <p class="data-note">로컬 API 연결 준비 중…</p>
-          </section>
-
-          <section class="view" data-view="report">
-            <p class="data-note">로컬 API 연결 준비 중…</p>
-          </section>
-
-          <section class="view" data-view="profile">
-            <p class="data-note">로컬 API 연결 준비 중…</p>
-          </section>
-        </section>
+        <main class="content" id="main-content" tabindex="-1">
+          <section class="view active" data-view="home" data-root-view></section>
+          <section class="view" data-view="inventory" data-root-view hidden></section>
+          <section class="view" data-view="recommend" data-root-view hidden></section>
+          <section class="view" data-view="report" data-root-view hidden></section>
+          <section class="view" data-view="profile" data-root-view hidden></section>
+          <section class="view" data-view="recipe" data-parent-view="recommend" hidden></section>
+          <section class="view" data-view="cook" data-parent-view="recommend" hidden></section>
+          <section class="view" data-view="record" data-parent-view="recommend" hidden></section>
+        </main>
       </div>
-      <nav class="mobile-nav">
-        <button class="active" data-view-link="home">⌂<span>오늘</span></button
-        ><button data-view-link="recommend">✦<span>추천</span></button
-        ><button data-view-link="inventory">▦<span>냉장고</span></button
-        ><button data-view-link="report">◔<span>리포트</span></button
-        ><button data-view-link="profile">◌<span>프로필</span></button>
-      </nav>
-    </main>
-    <div class="toast" id="toast" role="status"></div>
+    </div>
     <dialog id="scenario-dialog" aria-labelledby="dialog-title">
       <div class="dialog-heading">
         <h2 id="dialog-title"></h2>
-        <button type="button" id="dialog-close" aria-label="닫기">×</button>
+        <button type="button" id="dialog-close" class="icon-button" aria-label="닫기">×</button>
       </div>
       <div id="dialog-body"></div>
-      <p id="dialog-error" class="error-message" role="alert" hidden></p>
+      <p id="dialog-error" class="scenario-warning" role="alert" hidden></p>
     </dialog>
     <script src="{{ url_for('static', filename='api_client.js') }}"></script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>

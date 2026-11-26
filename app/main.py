@@ -23,6 +23,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+# Keep the page template in sync with static assets during local UI edits.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".ogg", ".mp4"}
 
 

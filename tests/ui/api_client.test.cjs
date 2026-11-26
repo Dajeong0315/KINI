@@ -1,4 +1,4 @@
-﻿const test = require("node:test"),
+const test = require("node:test"),
   assert = require("node:assert/strict"),
   fs = require("node:fs"),
   vm = require("node:vm");
@@ -41,7 +41,7 @@ test("login authenticates member lookup and clears a rejected session", async ()
       path === "/api/auth/login"
         ? response({ access_token: "synthetic-token", household_id: 1,
             role: "owner", expires_at: Date.now() / 1000 + 3600 })
-        : response({ members: [{ id: 3 }] }, status),
+        : response({ id: 1, name: "Test family", members: [{ id: 3 }] }, status),
     );
     if (status === 200) {
       await api.login("owner", "synthetic-password", 1);
@@ -52,7 +52,7 @@ test("login authenticates member lookup and clears a rejected session", async ()
       await assert.rejects(() => api.inventory(), { status: 401 });
     }
     assert.equal(calls[1].headers.Authorization, "Bearer synthetic-token");
-    assert.equal(calls[1].path, "/api/members?household_id=1");
+    assert.equal(calls[1].path, "/api/households/1");
   }
 });
 test("every terminal response removes candidates even if server includes stale items", async () => {
@@ -135,8 +135,8 @@ test("failed changes preserve verified draft; completion omits non-eaters and pr
           role: "owner",
           expires_at: Date.now() / 1000 + 3600,
         })
-      : path.startsWith("/api/members")
-        ? response({ members: [{ id: 3 }, { id: 4 }] })
+      : path === "/api/households/1"
+        ? response({ id: 1, name: "Test family", members: [{ id: 3 }, { id: 4 }] })
         : fail
           ? response({ error: "invalid change" }, 400)
           : response({
@@ -205,8 +205,8 @@ test("a lost confirmation response retries the same event and quantity", async (
         role: "owner",
         expires_at: Date.now() / 1000 + 3600,
       });
-    if (path.startsWith("/api/members"))
-      return response({ members: [{ id: 3 }] });
+    if (path === "/api/households/1")
+      return response({ id: 1, name: "Test family", members: [{ id: 3 }] });
     if (path === "/api/cooking-sessions/4")
       return response({
         id: 4,

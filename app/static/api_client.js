@@ -20,6 +20,7 @@
       meal: null,
       receipts: [],
       inventory: null,
+      inventoryStatus: "idle",
       session: null,
       outflows: null,
       data: null,
@@ -108,6 +109,7 @@
       token = null;
       state.session = null;
       state.inventory = null;
+      state.inventoryStatus = "idle";
     }
     async function login(login_name, password, household_id) {
       if (
@@ -124,38 +126,46 @@
       });
       state.session = { role: v.role, expiresAt: v.expires_at * 1000 };
       token = v.access_token;
-      let members;
+      let household;
       try {
-        members = (
-          await request(`/api/members?household_id=${v.household_id}`, undefined, true)
-        ).members;
+        household = await request(`/api/households/${v.household_id}`, undefined, true);
       } catch (error) {
         clearSession();
         throw error;
       }
       if (state.household?.id !== v.household_id) {
         invalidate();
-        state.selected = members.map((m) => m.id);
+        state.selected = [];
         state.receipts = [];
         state.ingredientNames = {};
         state.cooking = null;
         state.outflows = null;
         incoming = null;
       }
-      state.household = {
-        id: v.household_id,
-        name: `가구 ${v.household_id}`,
-        members,
-      };
+      state.household = household;
+    }
+    async function addMember(profile) {
+      unlocked();
+      const member = await request(`/api/households/${state.household.id}/members`, profile, true);
+      state.household.members = [...state.household.members, member];
+      invalidate();
+      return member;
     }
     async function inventory() {
-      state.inventory = await request("/api/data/inventory", undefined, true);
+      state.inventoryStatus = "loading";
+      try {
+        state.inventory = await request("/api/data/inventory", undefined, true);
+      } catch (error) {
+        if (state.session) state.inventoryStatus = "error";
+        throw error;
+      }
+      state.inventoryStatus = "ready";
       for (const item of state.inventory.items)
         state.ingredientNames[item.ingredient_id] = item.name;
       return state.inventory;
     }
     async function refreshData() {
-      const paths = ["/api/data-releases", "/api/data-quality/summary"],
+      const paths = ["/api/data-releases", "/api/data-quality/summary", "/api/data/status"],
         v = await Promise.allSettled(paths.map((p) => request(p)));
       state.dataErrors = v.flatMap((x, i) =>
         x.status === "rejected" ? [`${paths[i]}: ${x.reason.message}`] : [],
@@ -163,6 +173,7 @@
       state.data = {
         releases: v[0].status === "fulfilled" ? v[0].value : null,
         quality: v[1].status === "fulfilled" ? v[1].value : null,
+        datasetMode: v[2].status === "fulfilled" ? v[2].value.dataset_mode : null,
       };
       return state.data;
     }
@@ -342,6 +353,7 @@
         }
       } finally {
         state.inventory = null;
+        state.inventoryStatus = "idle";
       }
     }
     async function complete(items, confirmed, manual, existingIds = []) {
@@ -431,6 +443,7 @@
       state.meal = null;
       submittedMeal = null;
       state.inventory = null;
+      state.inventoryStatus = "idle";
       // A new recommendation must supply a fresh inventory snapshot after completion.
       if (state.result) state.result.inventory_snapshot = [];
       return v;
@@ -439,6 +452,7 @@
       state,
       request,
       login,
+      addMember,
       clearSession,
       refreshData,
       recommend,
@@ -473,12 +487,12 @@
           question,
         });
       },
-      async addInventory(name, quantity, expiry_date) {
+      async addInventory(name, quantity, expiry_date, unit = "g") {
         unlocked();
         const n = await request("/api/inventory/normalize", {
           name,
           quantity,
-          unit: "g",
+          unit,
         });
         if (!n.ingredient.ingredient_id || n.conversion.quantity_g == null)
           throw new APIError(
@@ -513,6 +527,7 @@
         incoming = null;
         invalidate();
         state.inventory = null;
+        state.inventoryStatus = "idle";
         return v;
       },
     };
