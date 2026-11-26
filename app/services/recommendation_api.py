@@ -215,7 +215,7 @@ def cooking_question(session_id):
 @api.get('/api/households/demo')
 def demo():
     with closing(open_db()) as db:
-        private = db.execute("SELECT 1 FROM metadata WHERE key='dataset_mode' AND value='private'").fetchone()
+        private = getattr(db, 'is_postgres', False) or db.execute("SELECT 1 FROM metadata WHERE key='dataset_mode' AND value='private'").fetchone()
         managed = db.execute('SELECT 1 FROM account_households WHERE household_id=1').fetchone()
         if private or managed:
             return jsonify({'error': '데모 가족을 사용할 수 없습니다.'}), 404
@@ -227,7 +227,7 @@ def get_members():
     household_id=int(request.args.get('household_id',1))
     with closing(open_db()) as db:
         managed = db.execute('SELECT 1 FROM account_households WHERE household_id=?', (household_id,)).fetchone()
-        private = db.execute("SELECT 1 FROM metadata WHERE key='dataset_mode' AND value='private'").fetchone()
+        private = getattr(db, 'is_postgres', False) or db.execute("SELECT 1 FROM metadata WHERE key='dataset_mode' AND value='private'").fetchone()
         if managed or private:
             scheme, _, token = request.headers.get('Authorization', '').partition(' ')
             if scheme.lower() != 'bearer' or not token.strip():

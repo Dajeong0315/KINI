@@ -72,12 +72,14 @@ def login_account(db, login_name, password, *, ttl_seconds=3600, now=None):
     return token
 
 
-def authorize_account(db, token, *, now=None):
+def authorize_account(db, token, *, now=None, write=False):
     current = int(time.time() if now is None else now)
-    row = db.execute('''SELECT a.id,a.login_name FROM local_account_sessions s
+    query = '''SELECT a.id,a.login_name FROM local_account_sessions s
         JOIN local_accounts a ON a.id=s.account_id
-        WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND a.active=TRUE''',
-        (_digest(token), current)).fetchone()
+        WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND a.active=TRUE'''
+    if write and getattr(db, 'is_postgres', False):
+        query += ' FOR SHARE OF s,a'
+    row = db.execute(query, (_digest(token), current)).fetchone()
     if not row:
         raise PermissionError('유효한 계정 세션이 필요합니다.')
     return dict(row)
@@ -88,11 +90,13 @@ _DUMMY_HASH = generate_password_hash('unused-' + secrets.token_hex(24))
 
 def authorize(db, token, *, household_id=None, write=False, now=None):
     current = int(time.time() if now is None else now)
-    row = db.execute('''SELECT s.account_id,s.household_id,h.role FROM auth_sessions s
+    query = '''SELECT s.account_id,s.household_id,h.role FROM auth_sessions s
         JOIN local_accounts a ON a.id=s.account_id
         JOIN account_households h ON h.account_id=s.account_id AND h.household_id=s.household_id
-        WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND a.active=TRUE''',
-        (_digest(token), current)).fetchone()
+        WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND a.active=TRUE'''
+    if write and getattr(db, 'is_postgres', False):
+        query += ' FOR SHARE OF s,a,h'
+    row = db.execute(query, (_digest(token), current)).fetchone()
     if not row:
         raise AuthenticationError('유효한 가구 세션이 필요합니다.')
     if household_id is not None and row['household_id'] != household_id:
