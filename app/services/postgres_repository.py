@@ -31,6 +31,8 @@ def hybrid_row(cursor):
 
 
 class PostgresConnection:
+    is_postgres = True
+
     def __init__(self, connection):
         self._connection = connection
 
@@ -93,6 +95,10 @@ class PostgresCursor:
 
     def __iter__(self):
         return iter(self.fetchall())
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
 
 
 def connect_postgres():
