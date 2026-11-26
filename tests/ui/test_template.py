@@ -42,8 +42,8 @@ def test_original_views_and_controls_remain_available(client):
     page.feed(response.get_data(as_text=True))
     assert set(page.views) == {"home", "recommend", "recipe", "cook", "record", "inventory", "report", "profile"}
     assert len(page.ids) == len(set(page.ids))
-    assert {"scenario-dialog", "recommendation-status", "recognition-controls", "record-controls", "report-controls", "edit-profile"} <= set(page.ids)
-    assert page.scripts == ["/static/scenario_demo.js", "/static/api_client.js", "/static/app.js"]
+    assert {"scenario-dialog", "demo-tools", "household-settings"} <= set(page.ids)
+    assert page.scripts == ["/static/api_client.js", "/static/app.js"]
     assert page.styles == ["/static/style.css", "/static/scenario.css"]
 
 
@@ -53,4 +53,6 @@ def test_all_scenario_assets_are_served_and_no_external_services_are_embedded(cl
         assert client.get(f"/static/{name}").status_code == 200
     for forbidden in ("api.openai.com", "supabase.co", "cdn.", "TAVILY_API_KEY"):
         assert forbidden not in html
-    assert "새로고침하면 초기화됩니다" in html
+    assert "로컬 API 연결" in html
+    assert "scenario_demo.js" not in html
+    assert "시금치 두부 달걀국" not in html

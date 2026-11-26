@@ -7,7 +7,7 @@ const path = require('node:path');
 function model() {
   const context = vm.createContext({ setTimeout, fetch() { throw Error('Network forbidden'); } });
   for (const file of ['scenario_demo.js', 'api_client.js']) {
-    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../app/static', file), 'utf8'), context);
+    vm.runInContext(fs.readFileSync(file === 'api_client.js' ? path.join(__dirname, 'demo_api_client.js') : path.join(__dirname, '../../app/static', file), 'utf8'), context);
   }
   return { m: context.KINIDemo.createModel({ now: () => new Date('2026-11-25T12:00:00+09:00') }), context };
 }

@@ -74,3 +74,85 @@ button, select { touch-action: manipulation; }
   .household { min-width: 0; }
   .household .avatar { display: none; }
 }
+/* Layout additions for API-backed forms; preserve the existing shell and palette. */
+.view form { display: grid; gap: 16px; max-width: 620px; margin: 20px 0; }
+.view form > button { justify-self: start; }
+.view .scenario-section > button { margin: 8px 10px 8px 0; }
+.view .scenario-field:has(input[type=checkbox]) { display: flex; align-items: center; gap: 12px; }
+.view .scenario-field input[type=checkbox] { width: 22px; height: 22px; min-height: 22px; flex-shrink: 0; accent-color: #173e39; }
+.recipe-option { display: block; text-align: left; width: 100%; }
+.recipe-option h2 { font-size: 1.2rem; }
+.scenario-section .inventory-item { flex-wrap: wrap; }
+.scenario-section .inventory-item h2 { font-size: 1rem; }
+.scenario-section .inventory-item .data-note { overflow-wrap: anywhere; }
+[role=alert] { overflow-wrap: anywhere; }
+@media (max-width: 660px) { .view form { width: 100%; } .scenario-controls { align-items: stretch; } .scenario-controls > label { width: 100%; } }
+.reason-card .data-note { color: #e3e9e5; }
+/* Explicit surfaces: device mode owns the layout; viewport size only fits it. */
+html[data-device=fridge] { background: #080e10; color-scheme: dark; }
+html[data-device=mobile] { background: #e9eaed; color-scheme: light; }
+.app-shell { color: var(--ink); }
+.device-switch { display: flex; padding: 4px; gap: 3px; border: 1px solid var(--line); border-radius: 12px; }
+.device-switch button { min-height: 36px; padding: 7px 12px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; font-size: .76rem; font-weight: 750; white-space: nowrap; }
+.device-switch button[aria-pressed=true] { color: #fff; background: #c9003b; }
+.device-context { display: flex; justify-content: space-between; padding: 14px 30px; border-bottom: 1px solid var(--line); font-size: .74rem; color: var(--muted); }
+.device-context #device-label { color: var(--ink); font-weight: 800; letter-spacing: .03em; }
+.scenario-notice { color: var(--muted); }
+.stock-overview { position: relative; margin: 28px 0 4px; padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); }
+.stock-overview .data-note { margin: 12px 0 20px; }
+.home-dashboard { display: grid; gap: 20px; align-items: start; }
+.home-dashboard .card { margin-top: 20px; }
+.home-dashboard .members { gap: 12px; }
+.member { padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; min-width: 72px; min-height: 56px; align-content: center; font-size: .9rem; color: var(--muted); }
+.member.selected { color: var(--ink); border-color: var(--leaf); background: var(--mint); }
+.home-dashboard .ai-answer { margin: 16px 0 0; }
+.home-dashboard .ai-answer:empty { display: none; }
+.app-shell[data-device=mobile] { width: min(480px,100%); max-width: 480px; min-height: 100dvh; }
+.app-shell[data-device=mobile] .topbar { padding: 0 16px; gap: 8px; }
+.app-shell[data-device=mobile] .household { display: none; }
+.app-shell[data-device=mobile] .top-actions { margin-left: auto; }
+.app-shell[data-device=mobile] .device-context { padding: 12px 18px; }
+.app-shell[data-device=mobile] .scenario-notice { padding: 12px 18px; flex-direction: column; align-items: start; gap: 6px; }
+.app-shell[data-device=mobile] .view h1 { font-size: 2.4rem; line-height: 1.1; }
+.app-shell[data-device=mobile] .view { padding: 26px 18px 110px; }
+.app-shell[data-device=mobile] .home-dashboard { grid-template-columns: 1fr; gap: 0; }
+.app-shell[data-device=mobile] .stock-overview { background: #fff0f4; border-color: #efced7; }
+.app-shell[data-device=mobile] .member { flex: 1 1 88px; }
+.app-shell[data-device=mobile] .scenario-controls { display: grid; grid-template-columns: 1fr; }
+.app-shell[data-device=mobile] .recipe-hero, .app-shell[data-device=mobile] .recipe-columns, .app-shell[data-device=mobile] .inventory-grid { grid-template-columns: 1fr; }
+.app-shell[data-device=mobile] .recipe-option { min-width: 0; }
+.app-shell[data-device=mobile] .mobile-nav { width: min(480px,100%); padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+.app-shell[data-device=mobile] .scenario-warning { color: #8e2445; }
+.app-shell[data-device=fridge] { width: min(1120px,100%); max-width: 1120px; min-height: 100dvh; }
+.app-shell[data-device=fridge] .topbar { position: relative; height: 84px; }
+.app-shell[data-device=fridge] .wordmark { font-size: 1.4rem; }
+.app-shell[data-device=fridge] .view { max-width: none; padding: 38px 32px 125px; }
+.app-shell[data-device=fridge] .view h1 { font-size: clamp(2.4rem,4.5vw,3.5rem); line-height: 1.08; }
+.app-shell[data-device=fridge] .home-dashboard { grid-template-columns: 1fr 1fr; }
+.app-shell[data-device=fridge] .card { padding: 26px; }
+.app-shell[data-device=fridge] .stock-overview { background: linear-gradient(115deg,#273e3b,#172125); }
+.app-shell[data-device=fridge] .member { min-height: 76px; min-width: 86px; font-size: 1.05rem; }
+.app-shell[data-device=fridge] .member.selected { color: #fff; border-color: #ff7598; background: #6d223b; }
+.app-shell[data-device=fridge] .primary { min-height: 52px; padding: 14px 20px; color: #fff; background: #d62659; }
+.app-shell[data-device=fridge] .primary:hover { background: #b61b49; }
+.app-shell[data-device=fridge] .scenario-field { color: #e5ece8; }
+.app-shell[data-device=fridge] .scenario-field input, .app-shell[data-device=fridge] .scenario-field select { min-height: 50px; color: #f3f6f4; background: #142025; border-color: #6b827c; }
+.app-shell[data-device=fridge] .scenario-field input[type=checkbox] { min-height: 22px; }
+.app-shell[data-device=fridge] .scenario-notice { color: #c5d3ce; background: #172125; }
+.app-shell[data-device=fridge] .device-context { color: #c5d3ce; background: #111b1d; }
+.app-shell[data-device=fridge] .ai-answer { color: #eaf2ef; background: #183530; }
+.app-shell[data-device=fridge] .scenario-status { color: #e1eae5; }
+.app-shell[data-device=fridge] .scenario-status[data-state=api_error], .app-shell[data-device=fridge] .scenario-status[data-state=privacy_blocked], .app-shell[data-device=fridge] .scenario-status[data-state=stale_unvalidated] { color: #ffd7e3; background: #48202d; }
+.app-shell[data-device=fridge] .mobile-nav { width: min(1120px,100%); padding: 15px 32px calc(15px + env(safe-area-inset-bottom)); }
+.app-shell[data-device=fridge] .mobile-nav button { min-height: 48px; min-width: 80px; }
+@media (max-width: 760px) {
+ .app-shell[data-device=fridge] .home-dashboard { grid-template-columns: 1fr; gap: 0; }
+ .app-shell[data-device=fridge] .view { padding: 28px 20px 120px; }
+ .app-shell[data-device=fridge] .household { display: none; }
+ .app-shell[data-device=fridge] .topbar { padding: 0 20px; }
+ .app-shell[data-device=fridge] .top-actions { margin-left: auto; }
+ .app-shell[data-device=fridge] .wordmark { font-size: 1rem; }
+ .app-shell[data-device=fridge] .mobile-nav { padding-inline: 8px; }
+ .app-shell[data-device=fridge] .mobile-nav button { min-width: 52px; }
+}
+.app-shell[data-device=mobile] .members { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
