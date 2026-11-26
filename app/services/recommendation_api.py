@@ -27,7 +27,8 @@ def postgres_supported_routes():
     # Do not expose private tables through legacy routes whose PostgreSQL
     # persistence/authorization has not been migrated and verified yet.
     supported = {'privacy_capabilities', 'demo', 'get_members', 'create_recommendation',
-                 'get_recommendation', 'add_feedback', 'data_releases', 'data_release', 'data_quality_summary'}
+                 'get_recommendation', 'add_feedback', 'data_releases', 'data_release', 'data_quality_summary',
+                 'create_session', 'cooking_create', 'cooking_get', 'cooking_change'}
     if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres' and request.endpoint.rsplit('.', 1)[-1] not in supported:
         return jsonify({'error': '이 API의 PostgreSQL 이전은 아직 완료되지 않았습니다.',
                         'status': 'not_implemented'}), 501
@@ -47,6 +48,15 @@ def postgres_identity(db, household_id=None, *, write=False):
     if scheme.lower() != 'bearer' or not token.strip():
         raise AuthenticationError('가구 세션이 필요합니다.')
     return authorize(db, token.strip(), household_id=household_id, write=write)
+
+
+def postgres_cooking_identity(db, session_id, *, write=False):
+    if getattr(db, 'is_postgres', False):
+        postgres_identity(db, write=write)
+        row = db.execute('SELECT household_id FROM cooking_sessions WHERE id=?', (session_id,)).fetchone()
+        if not row:
+            raise ValueError('조리 세션을 찾을 수 없습니다.')
+        postgres_identity(db, row['household_id'], write=write)
 
 def validated(model):
     return model.model_validate(request.get_json(silent=True) or {})
@@ -179,18 +189,31 @@ def voice_recommendation():
 @errors
 def cooking_create():
     obj=validated(CookingSessionRequest)
-    with open_db() as db: return jsonify(cooking.create(db,obj)),201
+    with closing(open_db()) as db, db:
+        if getattr(db, 'is_postgres', False):
+            postgres_identity(db, write=True)
+            for table, resource_id in [('meal_sessions', obj.meal_session_id),
+                                       ('recommendation_requests', obj.recommendation_request_id)]:
+                row = db.execute(f'SELECT household_id FROM {table} WHERE id=?', (resource_id,)).fetchone()
+                if not row:
+                    raise ValueError('추천 또는 식사 세션을 찾을 수 없습니다.')
+                postgres_identity(db, row['household_id'], write=True)
+        return jsonify(cooking.create(db,obj)),201
 
 @api.get('/api/cooking-sessions/<int:session_id>')
 @errors
 def cooking_get(session_id):
-    with open_db() as db: return jsonify(cooking.state(db,session_id))
+    with closing(open_db()) as db, db:
+        postgres_cooking_identity(db, session_id)
+        return jsonify(cooking.state(db,session_id))
 
 @api.post('/api/cooking-sessions/<int:session_id>/ingredients')
 @errors
 def cooking_change(session_id):
     obj=validated(CookingChangeRequest)
-    with open_db() as db: return jsonify(cooking.change(db,session_id,obj))
+    with closing(open_db()) as db, db:
+        postgres_cooking_identity(db, session_id, write=True)
+        return jsonify(cooking.change(db,session_id,obj))
 
 @api.post('/api/cooking-sessions/<int:session_id>/complete')
 @errors
@@ -270,10 +293,14 @@ def get_members():
 @errors
 def create_session():
     obj=validated(MealSessionRequest); ids=sorted(set(obj.participant_ids))
-    with open_db() as db:
+    with closing(open_db()) as db, db:
+        postgres_identity(db, obj.household_id, write=True)
         if len(members(db,obj.household_id,ids))!=len(ids): raise ValueError('해당 가구의 참여자를 선택하세요.')
         cur=db.execute('INSERT INTO meal_sessions(household_id,meal_type) VALUES (?,?)',(obj.household_id,obj.meal_type))
         db.executemany('INSERT INTO meal_session_participants VALUES (?,?)',[(cur.lastrowid,i) for i in ids])
+        if getattr(db, 'is_postgres', False):
+            db.execute('INSERT INTO meal_data_context SELECT ?,source_code,release_id FROM active_data_releases',
+                       (cur.lastrowid,))
         return jsonify({'session_id':cur.lastrowid,'household_id':obj.household_id,'meal_type':obj.meal_type,'participant_ids':ids}),201
 
 @api.post('/api/recommendations')

@@ -78,3 +78,11 @@ publishable key와 프로젝트 URL만으로는 서버 DB 연결이 되지 않�
 해당 브랜치의 run_migrations.py는 001~004 전체를 적용하므로 계정·가족 전용 실행으로 혼동하지 않는다.
 추천 schema까지 실제 Supabase에 적용할지는 별도 기준 커밋·기존 schema 충돌·권한 검토 후 확정한다.
 관련 완료 범위와 화면 토큰 전달 사항은 PostgreSQL_추천_N1_N3_검증.md를 확인한다.
+
+## 같은 날 조리 단위 추가
+
+가족 PR #33은 75fcf3e, 추천 PR #34는 6b1b5b6으로 main에 병합됐다.
+따라서 해당 main의 실행기는 001~004를 적용한다.
+별도 codex/postgres-cooking-session에는 005_cooking_sessions가 추가됐으며 아직 main 반영 대상과 구분해야 한다.
+해당 브랜치를 적용 기준으로 선택하면 001~005가 적용되지만 조리 완료·섭취·리포트 API까지 지원하는 것은 아니다.
+PostgreSQL_조리세션_이전_검증.md의 지원 경로와 C 토큰 전달 사항을 함께 확인한다.

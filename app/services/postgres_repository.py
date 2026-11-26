@@ -39,7 +39,7 @@ class PostgresConnection:
     def execute(self, query, params=()):
         query = _qmark_to_postgres(query)
         match = re.match(r"\s*INSERT\s+INTO\s+([a-z_]+)\s*\([^)]*\)", query, re.I)
-        if match and "RETURNING" not in query.upper() and match.group(1) in {"households", "members", "ingredients", "inventory_items", "inventory_events", "meal_sessions", "recipes", "recommendation_requests", "recommendation_feedback", "preference_evidence", "inferred_preferences", "meal_records", "meal_record_items"}:
+        if match and "RETURNING" not in query.upper() and match.group(1) in {"households", "members", "ingredients", "inventory_items", "inventory_events", "meal_sessions", "recipes", "recommendation_requests", "recommendation_feedback", "preference_evidence", "inferred_preferences", "meal_records", "meal_record_items", "cooking_sessions"}:
             query += " RETURNING id"
         return PostgresCursor(self._connection.execute(query, params))
 
