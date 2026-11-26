@@ -6,6 +6,7 @@ from .freshness import assess_inventory
 from .recommendation_repository import members
 from .recommendation_engine import NUTRIENTS
 from .personalization import add_evidence, aggregate, update_summary
+from .recommendation_provider import RecommendationNutritionProvider
 from .data_quality import inspect_ingredient
 
 
@@ -20,7 +21,7 @@ def state(db, session_id):
     warnings=[]; demo=False
     for entry in result['ingredients']:
         inventory=[dict(r) for r in db.execute('SELECT * FROM inventory_items WHERE household_id=? AND ingredient_id=?',(result['household_id'],entry['ingredient_id']))]
-        _, flags, quality=inspect_ingredient(db,entry['ingredient_id'],people,inventory)
+        _, flags, quality=inspect_ingredient(db,entry['ingredient_id'],people,inventory,RecommendationNutritionProvider())
         warnings.extend(flags)
         demo=demo or bool(quality and (quality['source_type']=='demo' or quality['nutrition_source']=='demo'))
     result.update({'warnings':sorted(set(warnings)),'requires_confirmation':bool(warnings),'data_quality':'demo_data' if demo else 'confirmation_required' if warnings else 'verified'})
@@ -30,25 +31,27 @@ def state(db, session_id):
 def validate(db, session):
     recipe = db.execute('SELECT servings FROM recipes WHERE id=?', (session['recipe_id'],)).fetchone()
     ids = [r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=? ORDER BY member_id', (session['meal_session_id'],))]
+    portions = session.get('planned_servings') or recipe['servings']
+    if not portions or portions <= 0: raise ValueError('조리 인분 확인이 필요합니다.')
     people = members(db, session['household_id'], ids)
     if not people or len(people)!=len(ids): raise ValueError('식사 참여자 정보가 부족합니다.')
     nutrients = {n:0.0 for n in NUTRIENTS}
     if not session['ingredients']: raise ValueError('재료가 없습니다.')
     for entry in session['ingredients']:
         item = db.execute('SELECT i.*,n.energy_kcal,n.protein_g,n.carbohydrate_g,n.fat_g,n.sodium_mg FROM ingredients i LEFT JOIN ingredient_nutrition n ON n.ingredient_id=i.id WHERE i.id=?',(entry['ingredient_id'],)).fetchone()
-        if not item or entry['quantity_g'] <= 0 or any(item[n] is None for n in NUTRIENTS): raise ValueError('재료 수량 또는 영양 정보 확인이 필요합니다.')
+        if not item or entry['quantity_g'] <= 0: raise ValueError('재료 수량 또는 영양 정보 확인이 필요합니다.')
         for person in people:
             if item['name'] in person['allergies'] or item['category'] in person['allergies']: raise ValueError('참여자 알레르기 재료는 사용할 수 없습니다.')
             for constraint in person['constraints']:
                 if constraint['kind'] not in ('excluded_ingredient','meal_sodium_max_mg'): raise ValueError('지원하지 않는 건강 제한이 있습니다.')
                 if constraint['kind']=='excluded_ingredient' and constraint['value'] in (item['name'],item['category']): raise ValueError('참여자의 식이 제한에 해당합니다.')
         inventory = [dict(r) for r in db.execute('SELECT * FROM inventory_items WHERE household_id=? AND ingredient_id=?',(session['household_id'],item['id']))]
-        codes,_,quality=inspect_ingredient(db,item['id'],people,inventory)
+        codes,_,quality=inspect_ingredient(db,item['id'],people,inventory,RecommendationNutritionProvider())
         if codes: raise ValueError('재료의 알레르기, 라벨 또는 영양 정보 확인이 필요합니다.')
         guideline_row=db.execute('SELECT * FROM ingredient_storage_guidelines WHERE ingredient_id=? ORDER BY rowid DESC LIMIT 1',(item['id'],)).fetchone()
         guideline=dict(guideline_row) if guideline_row else None
         if any(not assess_inventory(x,guideline=guideline)['usable'] for x in inventory): raise ValueError('재료의 상태 또는 소비기한 확인이 필요합니다.')
-        for n in NUTRIENTS: nutrients[n] += item[n]*entry['quantity_g']/quality['basis_amount_g']/recipe['servings']
+        for n in NUTRIENTS: nutrients[n] += quality[n]*entry['quantity_g']/quality['basis_amount_g']/portions
     for person in people:
         for constraint in person['constraints']:
             if constraint['kind']=='meal_sodium_max_mg' and nutrients['sodium_mg']>float(constraint['value']): raise ValueError('참여자의 식사 나트륨 제한을 초과합니다.')
@@ -66,8 +69,13 @@ def create(db, obj):
     if not db.execute('SELECT 1 FROM recommendation_candidates WHERE request_id=? AND recipe_id=?',(obj.recommendation_request_id,obj.recipe_id)).fetchone(): raise ValueError('표시된 추천 후보가 아닙니다.')
     ingredients = [dict(r) for r in db.execute('SELECT ingredient_id,quantity_g FROM recipe_ingredients WHERE recipe_id=? ORDER BY ingredient_id',(obj.recipe_id,))]
     draft={'recipe_id':obj.recipe_id,'meal_session_id':obj.meal_session_id,'household_id':meal['household_id'],'ingredients':ingredients}
+    base = db.execute('SELECT servings FROM recipes WHERE id=?',(obj.recipe_id,)).fetchone()[0]
+    if not base or base <= 0: raise ValueError('레시피 인분 확인이 필요합니다.')
+    draft['planned_servings'] = len(ids)
+    for entry in ingredients:
+        entry['quantity_g'] *= len(ids) / base
     validate(db,draft)
-    cur=db.execute('INSERT INTO cooking_sessions(household_id,meal_session_id,request_id,recipe_id,ingredients_json) VALUES (?,?,?,?,?)',(meal['household_id'],obj.meal_session_id,obj.recommendation_request_id,obj.recipe_id,json.dumps(ingredients)))
+    cur=db.execute('INSERT INTO cooking_sessions(household_id,meal_session_id,request_id,recipe_id,ingredients_json,planned_servings) VALUES (?,?,?,?,?,?)',(meal['household_id'],obj.meal_session_id,obj.recommendation_request_id,obj.recipe_id,json.dumps(ingredients),len(ids)))
     return state(db,cur.lastrowid)
 
 
@@ -137,25 +145,6 @@ def _link_confirmed_outflows(db, session, event_ids):
     )
 
 
-def _deduct_cooking_inventory(db, session):
-    for ingredient in session['ingredients']:
-        remaining=ingredient['quantity_g']
-        rows=db.execute('''SELECT * FROM inventory_items WHERE household_id=? AND ingredient_id=?
-            ORDER BY CASE WHEN use_by IS NULL THEN 1 ELSE 0 END, use_by, id''',
-            (session['household_id'],ingredient['ingredient_id'])).fetchall()
-        for row in rows:
-            stock=dict(row)
-            if not assess_inventory(stock)['usable'] or stock['quantity_g'] is None or stock['quantity_g'] <= 0:
-                continue
-            used=min(remaining,stock['quantity_g'])
-            left=stock['quantity_g']-used
-            # Persist the remaining quantity in grams so both quantity fields agree.
-            db.execute("UPDATE inventory_items SET quantity_g=?,quantity=?,unit='g' WHERE id=?",(left,left,stock['id']))
-            remaining-=used
-            if remaining <= 1e-9: break
-        if remaining > 1e-9: raise ValueError('확인된 재고가 부족합니다.')
-
-
 def complete(db, session_id, obj, *, inventory_token=None):
     datetime.fromisoformat(obj.eaten_at.replace('Z','+00:00'))
     # Serialize stock checks and session completion across concurrent requests.
@@ -182,7 +171,7 @@ def complete(db, session_id, obj, *, inventory_token=None):
     elif obj.inventory_event_ids:
         raise InventoryConfirmationRequired('출고 이벤트를 사용할 수 없는 서버입니다.', session['ingredients'])
     else:
-        _deduct_cooking_inventory(db, session)
+        raise InventoryConfirmationRequired('A 출고 확정이 필요합니다.', session['ingredients'])
     cur=db.execute('INSERT INTO meal_records(session_id,recipe_id,eaten_at) VALUES (?,?,?)',(session['meal_session_id'],session['recipe_id'],obj.eaten_at))
     for item in obj.items:
         rec=db.execute('INSERT INTO meal_record_items(record_id,member_id,servings) VALUES (?,?,?)',(cur.lastrowid,item.member_id,item.servings))

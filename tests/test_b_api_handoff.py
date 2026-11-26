@@ -93,9 +93,7 @@ def test_recommendation_cooking_and_intake_flow(monkeypatch, tmp_path):
         f"/api/cooking-sessions/{cooking.json['id']}/complete",
         json={"confirmed": True, "eaten_at": "2026-11-25T12:00:00", "items": [{"member_id": 3, "servings": 1}]},
     )
-    assert recorded.status_code == 201
-    assert recorded.json["record_id"] > 0
-    assert recorded.json['nutrition_per_serving'] == changed.json['nutrition_per_serving']
+    assert recorded.status_code == 409
 
 
 def test_completion_stock_zero_portions_and_atomic_failure(monkeypatch, tmp_path):
@@ -113,7 +111,7 @@ def test_completion_stock_zero_portions_and_atomic_failure(monkeypatch, tmp_path
     with open_db() as db:
         db.execute('UPDATE inventory_items SET quantity_g=1, quantity=1 WHERE household_id=1 AND ingredient_id=4')
         before = [tuple(r) for r in db.execute('SELECT id,quantity_g FROM inventory_items ORDER BY id')]
-    assert client.post(f'/api/cooking-sessions/{sid}/complete', json=payload).status_code == 400
+    assert client.post(f'/api/cooking-sessions/{sid}/complete', json=payload).status_code == 409
     with open_db() as db:
         assert [tuple(r) for r in db.execute('SELECT id,quantity_g FROM inventory_items ORDER BY id')] == before
         assert db.execute('SELECT COUNT(*) FROM meal_records').fetchone()[0] == 0
@@ -121,14 +119,9 @@ def test_completion_stock_zero_portions_and_atomic_failure(monkeypatch, tmp_path
         db.execute('UPDATE inventory_items SET quantity_g=1000, quantity=1000 WHERE household_id=1 AND ingredient_id=4')
         before = {r['ingredient_id']: r['quantity_g'] for r in db.execute('SELECT ingredient_id,quantity_g FROM inventory_items WHERE household_id=1')}
     done = client.post(f'/api/cooking-sessions/{sid}/complete', json=payload)
-    assert done.status_code == 201
-    assert client.post(f'/api/cooking-sessions/{sid}/complete', json=payload).status_code == 400
-    with open_db() as db:
-        after = {r['ingredient_id']: r['quantity_g'] for r in db.execute('SELECT ingredient_id,quantity_g FROM inventory_items WHERE household_id=1')}
-        for item in created.json['ingredients']:
-            assert after[item['ingredient_id']] == before[item['ingredient_id']] - item['quantity_g']
-        assert db.execute('SELECT servings FROM meal_record_items WHERE record_id=? AND member_id=3', (done.json['record_id'],)).fetchone()[0] == 0
-        assert db.execute("SELECT COUNT(*) FROM preference_evidence WHERE source_type='meal_record' AND member_id=3").fetchone()[0] == 0
+    assert done.status_code == 409
+    assert created.json['planned_servings'] == 2
+    assert next(i['quantity_g'] for i in created.json['ingredients'] if i['ingredient_id']==4) == 200
 
 
 @pytest.fixture
@@ -211,7 +204,7 @@ def test_a_outflow_and_cooking_completion_only_change_stock_once(inventory_autho
     return_id = _inventory_event(client, headers, 'stock_in', 'manual', '두부')
     _confirm_event(client, headers, return_id, ingredient_id=4, quantity_g=100)
     after_outflow = client.get('/api/data/inventory', headers=headers).json
-    assert sum(x['quantity_g'] for x in after_outflow['items'] if x['ingredient_id'] == 4) == 600
+    assert sum(x['quantity_g'] for x in after_outflow['items'] if x['ingredient_id'] == 4) == 900
     assert after_outflow['inventory_version'] == original['inventory_version'] + 4
 
     response = _complete_draft(client, draft, headers, inventory_event_ids=event_ids)
