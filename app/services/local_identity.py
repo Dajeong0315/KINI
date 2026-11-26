@@ -6,28 +6,38 @@ import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
 
 
-def create_account(db, login_name, password, household_id):
+def create_account(db, login_name, password, household_id=None):
     if not login_name.strip() or len(password) < 12:
         raise ValueError('로그인 이름과 12자 이상 비밀번호가 필요합니다.')
     account_id = str(uuid.uuid4())
     with db:
         db.execute('INSERT INTO local_accounts(id,login_name,password_hash) VALUES (?,?,?)',
                    (account_id, login_name.strip().casefold(), generate_password_hash(password)))
-        db.execute('INSERT INTO account_households VALUES (?,?,?)', (account_id, household_id, 'owner'))
+        if household_id is not None:
+            db.execute('INSERT INTO account_households VALUES (?,?,?)', (account_id, household_id, 'owner'))
     return account_id
+
+
+def authenticate_account(db, login_name, password, *, household_id=None):
+    """Check credentials with the same failure and hash work for missing identities."""
+    if household_id is None:
+        account = db.execute('SELECT * FROM local_accounts WHERE login_name=? AND active=1',
+                             (login_name.strip().casefold(),)).fetchone()
+    else:
+        account = db.execute('''SELECT a.* FROM local_accounts a JOIN account_households h
+            ON h.account_id=a.id WHERE a.login_name=? AND a.active=1 AND h.household_id=?''',
+            (login_name.strip().casefold(), household_id)).fetchone()
+    stored_hash = account['password_hash'] if account else _DUMMY_HASH
+    valid = check_password_hash(stored_hash, password)
+    if not account or not valid:
+        raise PermissionError('로그인 정보를 확인해 주세요.')
+    return account
 
 
 def login(db, login_name, password, household_id, *, ttl_seconds=3600, now=None):
     if not 0 < ttl_seconds <= 86400:
         raise ValueError('세션 수명은 1초~24시간이어야 합니다.')
-    account = db.execute('''SELECT a.* FROM local_accounts a JOIN account_households h
-        ON h.account_id=a.id WHERE a.login_name=? AND a.active=1 AND h.household_id=?''',
-        (login_name.strip().casefold(), household_id)).fetchone()
-    # Always perform a password hash check to reduce username enumeration timing.
-    stored_hash = account['password_hash'] if account else _DUMMY_HASH
-    valid = check_password_hash(stored_hash, password)
-    if not account or not valid:
-        raise PermissionError('로그인 정보를 확인해 주세요.')
+    account = authenticate_account(db, login_name, password, household_id=household_id)
     token = secrets.token_urlsafe(32)
     issued = int(time.time() if now is None else now)
     with db:
@@ -38,6 +48,31 @@ def login(db, login_name, password, household_id, *, ttl_seconds=3600, now=None)
 
 def _digest(token):
     return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
+def login_account(db, login_name, password, *, ttl_seconds=3600, now=None):
+    """Issue an account-only token, usable before joining any household."""
+    if not 0 < ttl_seconds <= 86400:
+        raise ValueError('세션 수명은 1초~24시간이어야 합니다.')
+    account = authenticate_account(db, login_name, password)
+    token = secrets.token_urlsafe(32)
+    issued = int(time.time() if now is None else now)
+    with db:
+        db.execute('''INSERT INTO local_account_sessions
+            (token_hash,account_id,created_at,expires_at) VALUES (?,?,?,?)''',
+            (_digest(token), account['id'], issued, issued + ttl_seconds))
+    return token
+
+
+def authorize_account(db, token, *, now=None):
+    current = int(time.time() if now is None else now)
+    row = db.execute('''SELECT a.id,a.login_name FROM local_account_sessions s
+        JOIN local_accounts a ON a.id=s.account_id
+        WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND a.active=1''',
+        (_digest(token), current)).fetchone()
+    if not row:
+        raise PermissionError('유효한 계정 세션이 필요합니다.')
+    return dict(row)
 
 
 _DUMMY_HASH = generate_password_hash('unused-' + secrets.token_hex(24))

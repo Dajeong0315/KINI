@@ -39,7 +39,7 @@ def test_migration_is_additive_and_repeatable(db):
     before = [tuple(r) for r in db.execute('SELECT * FROM members')]
     initialize(db)
     assert [tuple(r) for r in db.execute('SELECT * FROM members')] == before
-    assert [r[0] for r in db.execute('SELECT version FROM platform_migrations ORDER BY version')] == [1, 2]
+    assert [r[0] for r in db.execute('SELECT version FROM platform_migrations ORDER BY version')] == [1, 2, 3]
 
 
 def test_stage_preserves_verified_remote_release_uuid(db):
