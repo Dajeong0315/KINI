@@ -1,7 +1,7 @@
 """N2: full local rule computation on actual PostgreSQL, synthetic records only."""
 import os
 from contextlib import closing
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -27,7 +27,7 @@ def seed_family(db):
 @pytest.fixture
 def rule_db():
     with closing(open_db()) as db:
-        db.execute('TRUNCATE households, active_data_releases, meal_data_context, catalog_data_sources, ingredients, recipes CASCADE')
+        db.execute('TRUNCATE local_accounts, households, active_data_releases, meal_data_context, catalog_data_sources, ingredients, recipes CASCADE')
         db.executemany('INSERT INTO catalog_data_sources VALUES (?,?,?,?)', [(s,s,'https://example.invalid','review_required') for s in ('mfds_nutrition','mfds_recipe','10000recipe')])
         db.execute('UPDATE data_release_pointers SET nutrition_release_id=NULL,allergen_reference_version_id=NULL')
         db.commit()
@@ -114,3 +114,24 @@ def test_official_mapping_requires_published_current_release(rule_db):
     rule_db.execute("UPDATE dataset_releases SET status='retired'"); rule_db.commit()
     fallback = recommend(rule_db, request(), persist=False)['recommendations'][0]
     assert fallback['data_quality'] == 'demo_data' and fallback['nutrition_per_serving']['energy_kcal'] == 50
+
+
+@pytest.mark.parametrize('target', ['stock_nan', 'stock_inf', 'servings_nan', 'servings_inf'])
+def test_nonfinite_quantities_never_produce_candidates(rule_db, target):
+    value = float('nan') if target.endswith('nan') else float('inf')
+    if target.startswith('stock'):
+        rule_db.execute('UPDATE inventory_items SET quantity_g=?', (value,))
+    else:
+        rule_db.execute('UPDATE recipes SET servings=?', (value,))
+    rule_db.commit()
+    assert recommend(rule_db, request(), persist=False)['recommendations'] == []
+
+
+def test_latest_storage_guideline_is_used(rule_db):
+    rule_db.execute('UPDATE inventory_items SET received_at=?', ((date.today()-timedelta(days=10)).isoformat(),))
+    rule_db.execute("INSERT INTO ingredient_storage_guidelines(ingredient_id,guideline,unopened_days) VALUES (901,'older',100)")
+    rule_db.execute("INSERT INTO ingredient_storage_guidelines(ingredient_id,guideline,unopened_days) VALUES (901,'latest',1)")
+    rule_db.commit()
+    result = recommend(rule_db, request(), persist=False)
+    assert result['recommendations'] == []
+    assert 'food_safety_confirmation_required' in result['excluded'][0]['reason_codes']

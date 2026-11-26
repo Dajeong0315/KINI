@@ -31,6 +31,10 @@ def add_evidence(db, household_id, member_id, source, feature, value, signal, st
 
 
 def aggregate(db, household_id, now=None):
+    if getattr(db, 'is_postgres', False):
+        # Rebuilding the same household's inferred rows must not race another request.
+        db.execute('SELECT pg_advisory_xact_lock(hashtextextended(?,0))',
+                   (f'kini:preferences:{household_id}',))
     now = now or datetime.now(timezone.utc)
     rows = db.execute('SELECT * FROM preference_evidence WHERE household_id=? ORDER BY id', (household_id,)).fetchall()
     groups = {}

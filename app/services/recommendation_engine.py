@@ -38,7 +38,7 @@ def recommend(db, req, *, persist=True):
         if recipe['id'] in req.get('excluded_recipe_ids', []):
             excluded.append({'recipe_id':recipe['id'],'name':recipe['name'],'reasons':['이전에 표시한 메뉴 제외']})
             continue
-        if not recipe['servings'] or recipe['servings']<=0:
+        if not recipe['servings'] or not math.isfinite(recipe['servings']) or recipe['servings']<=0:
             excluded.append({'recipe_id':recipe['id'],'name':recipe['name'],'reasons':['인분 확인 필요'],'reason_codes':['unit_confirmation_required']})
             continue
         ingredients=recipe_ingredient_rows(db, recipe['id'])
@@ -51,7 +51,8 @@ def recommend(db, req, *, persist=True):
             if codes: reasons.extend({'allergen_conflict':f'{name}: 알레르기','label_confirmation_required':f'{name}: 성분표 확인 필요','nutrition_unknown':f'{name}: 영양 정보 부족','ingredient_unknown':f'{name}: 재료 정보 부족'}.get(code,code) for code in codes)
             if item['quantity_g'] is None or not math.isfinite(item['quantity_g']) or item['quantity_g'] <= 0:
                 reasons.append(f'{name}: 중량 확인 필요'); reason_codes.append('unit_confirmation_required'); continue
-            guideline_row=db.execute('SELECT * FROM ingredient_storage_guidelines WHERE ingredient_id=? ORDER BY ingredient_id,guideline,unopened_days,opened_days,frozen_days,recommended_storage DESC LIMIT 1',(item['id'],)).fetchone()
+            guideline_order = 'id' if getattr(db, 'is_postgres', False) else 'rowid'
+            guideline_row=db.execute(f'SELECT * FROM ingredient_storage_guidelines WHERE ingredient_id=? ORDER BY {guideline_order} DESC LIMIT 1',(item['id'],)).fetchone()
             guideline=dict(guideline_row) if guideline_row else None
             assessed=[(x, assess_inventory(x, date.fromisoformat(today), guideline)) for x in matching]
             safe=[x for x,assessment in assessed if assessment['usable']]
@@ -124,6 +125,15 @@ def recommend(db, req, *, persist=True):
 def persist_recommendation(db, req, result):
     """Publish only the final AI-chain outcome, atomically with visible candidates."""
     result = dict(result)
+    if result.get('status') == 'recommendations_available':
+        pointer = db.execute('SELECT nutrition_release_id,allergen_reference_version_id FROM data_release_pointers WHERE id=1').fetchone()
+        changed = result.get('_catalog_context') != catalog_context(db)
+        changed = changed or (pointer is not None and (
+            result.get('nutrition_data_release_id') != pointer['nutrition_release_id'] or
+            result.get('allergen_reference_version_id') != pointer['allergen_reference_version_id']))
+        if changed:
+            result.update(status='stale_unvalidated', recommendations=[], requires_confirmation=True)
+            result.setdefault('warnings', []).append('Reference release changed before saving; request a new recommendation.')
     candidates = result.get('recommendations', []) if result.get('status') == 'recommendations_available' else []
     with db:
         cur=db.execute('INSERT INTO recommendation_requests(household_id,request_json,result_json,nutrition_data_release_id,allergen_reference_version_id) VALUES (?,?,?,?,?)',(req['household_id'],json.dumps(req,ensure_ascii=False),'',result.get('nutrition_data_release_id'),result.get('allergen_reference_version_id')))

@@ -1,6 +1,6 @@
 param(
     [string]$Python = "python",
-    [string[]]$TestPaths = @('tests/test_postgres_inventory_concurrency.py', 'tests/test_postgres_integration.py', 'tests/test_vision_postgres_http.py', 'tests/test_family_postgres_http.py', 'tests/test_recommendation_read_postgres.py', 'tests/test_recommendation_rules_postgres.py')
+    [string[]]$TestPaths = @('tests/test_postgres_inventory_concurrency.py', 'tests/test_postgres_integration.py', 'tests/test_vision_postgres_http.py', 'tests/test_family_postgres_http.py', 'tests/test_recommendation_read_postgres.py', 'tests/test_recommendation_rules_postgres.py', 'tests/test_recommendation_http_postgres.py')
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,7 +33,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Could not identify PostgreSQL version." }
     & $Python scripts/run_migrations.py
     if ($LASTEXITCODE -ne 0) { throw "Migration failed." }
-    & $Python -m pytest -q @TestPaths
+    & $Python -m pytest -q --tb=short @TestPaths
     if ($LASTEXITCODE -ne 0) { throw "PostgreSQL tests failed." }
 } finally {
     $env:KINI_DB_BACKEND = $previousBackend
