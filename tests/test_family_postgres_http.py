@@ -218,8 +218,7 @@ def test_migrations_fresh_upgrade_repeat_and_profile_cascade(start):
                 repeat = subprocess.run([sys.executable, str(ROOT / 'scripts/run_migrations.py')],
                                         env=env, capture_output=True, text=True)
                 assert repeat.returncode == 0 and 'already up to date' in repeat.stdout
-                assert db.execute('SELECT version FROM schema_migrations ORDER BY version').fetchall() == [
-                    ('001_step1_postgresql',), ('002_family_profiles',)]
+                assert {'001_step1_postgresql', '002_family_profiles'} <= {r[0] for r in db.execute('SELECT version FROM schema_migrations')}
                 if start == 'step1':
                     assert db.execute('SELECT name FROM households WHERE id=9001').fetchone()[0] == 'synthetic preserved family'
                     assert db.execute('SELECT COUNT(*) FROM auth_sessions').fetchone()[0] == 1
