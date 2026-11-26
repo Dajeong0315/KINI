@@ -3,7 +3,7 @@ import math
 
 NUTRIENTS=('energy_kcal','protein_g','carbohydrate_g','fat_g','sodium_mg')
 
-def inspect_ingredient(db, ingredient_id, people, inventory):
+def inspect_ingredient(db, ingredient_id, people, inventory, nutrition_provider=None):
     item=db.execute('SELECT i.*,n.basis_amount_g,n.source_type AS nutrition_source,n.confidence AS nutrition_confidence,n.energy_kcal,n.protein_g,n.carbohydrate_g,n.fat_g,n.sodium_mg FROM ingredients i LEFT JOIN ingredient_nutrition n ON n.ingredient_id=i.id WHERE i.id=?',(ingredient_id,)).fetchone()
     codes=[]; warnings=[]
     if not item or not item['active']:
@@ -26,6 +26,17 @@ def inspect_ingredient(db, ingredient_id, people, inventory):
             GROUP BY f.id ORDER BY m.approved_at DESC LIMIT 1''',(ingredient_id,pointer['nutrition_release_id'])).fetchone()
     if official:
         item=dict(item); item.update(dict(official)); item['nutrition_source']='official_imported'; item['nutrition_confidence']=1.0
+    if nutrition_provider is not None:
+        item = dict(item)
+        record = nutrition_provider.get(db, ingredient_id, item)
+        if record is None:
+            codes.append('nutrition_unknown')
+        else:
+            item.update(record.values)
+            item['basis_amount_g'] = record.values.get('basis_amount_g', item['basis_amount_g'])
+            item['nutrition_source'] = record.source
+            item['nutrition_release_id'] = record.release_id
+            item['catalog_cache_status'] = record.cache_status
     basis=item['basis_amount_g']
     if not basis or not math.isfinite(basis) or basis<=0 or any(item[n] is None or not math.isfinite(item[n]) or item[n]<0 for n in NUTRIENTS): codes.append('nutrition_unknown')
     allergies={a for p in people for a in p['allergies']}
