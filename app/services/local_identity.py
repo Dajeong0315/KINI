@@ -6,6 +6,14 @@ import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
 
 
+class AuthenticationError(PermissionError):
+    pass
+
+
+class AuthorizationError(PermissionError):
+    pass
+
+
 def create_account(db, login_name, password, household_id):
     if not login_name.strip() or len(password) < 12:
         raise ValueError('로그인 이름과 12자 이상 비밀번호가 필요합니다.')
@@ -21,13 +29,13 @@ def login(db, login_name, password, household_id, *, ttl_seconds=3600, now=None)
     if not 0 < ttl_seconds <= 86400:
         raise ValueError('세션 수명은 1초~24시간이어야 합니다.')
     account = db.execute('''SELECT a.* FROM local_accounts a JOIN account_households h
-        ON h.account_id=a.id WHERE a.login_name=? AND a.active=1 AND h.household_id=?''',
+        ON h.account_id=a.id WHERE a.login_name=? AND a.active=TRUE AND h.household_id=?''',
         (login_name.strip().casefold(), household_id)).fetchone()
     # Always perform a password hash check to reduce username enumeration timing.
     stored_hash = account['password_hash'] if account else _DUMMY_HASH
     valid = check_password_hash(stored_hash, password)
     if not account or not valid:
-        raise PermissionError('로그인 정보를 확인해 주세요.')
+        raise AuthenticationError('로그인 정보를 확인해 주세요.')
     token = secrets.token_urlsafe(32)
     issued = int(time.time() if now is None else now)
     with db:
@@ -48,12 +56,14 @@ def authorize(db, token, *, household_id=None, write=False, now=None):
     row = db.execute('''SELECT s.account_id,s.household_id,h.role FROM auth_sessions s
         JOIN local_accounts a ON a.id=s.account_id
         JOIN account_households h ON h.account_id=s.account_id AND h.household_id=s.household_id
-        WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND a.active=1''',
+        WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND a.active=TRUE''',
         (_digest(token), current)).fetchone()
-    if not row or (household_id is not None and row['household_id'] != household_id):
-        raise PermissionError('유효한 가구 세션이 필요합니다.')
+    if not row:
+        raise AuthenticationError('유효한 가구 세션이 필요합니다.')
+    if household_id is not None and row['household_id'] != household_id:
+        raise AuthorizationError('해당 가구에 접근할 수 없습니다.')
     if write and row['role'] == 'viewer':
-        raise PermissionError('쓰기 권한이 없습니다.')
+        raise AuthorizationError('쓰기 권한이 없습니다.')
     return dict(row)
 
 

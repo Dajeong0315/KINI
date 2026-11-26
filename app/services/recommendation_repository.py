@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS data_release_pointers(id INTEGER PRIMARY KEY CHECK(id
 '''
 
 def connect(path=None):
+    if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres':
+        from .postgres_repository import connect_postgres
+        return connect_postgres()
     path = path or os.getenv('KINI_DB_PATH') or str(DATA / 'kini.sqlite3')
     db=sqlite3.connect(path, timeout=10)
     db.row_factory=sqlite3.Row
@@ -138,6 +141,10 @@ def initialize(db, *, seed_demo=None):
 
 def open_db(path=None, *, seed_demo=None):
     db=connect(path)
+    if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres':
+        # Production connections are schema-only at runtime. Migrations and
+        # demo fixtures are explicit operator actions, never request actions.
+        return db
     try:
         initialize(db, seed_demo=seed_demo)
     except Exception:
