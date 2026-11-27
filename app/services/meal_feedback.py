@@ -99,7 +99,7 @@ class Feedback:
     def evidence(self):
         """Current explicit facts, NOT scored preference_evidence rows.
 
-        Stable slot is (meal_feedback, record_id, member_id, dimension).
+        Stable slot is (meal_feedback, record_id, dimension); member is attribution.
         Editing replaces that slot; skipping yields none, including after an edit.
         """
         return tuple((dimension, code) for dimension, code in self.ratings.model_dump().items()
@@ -118,7 +118,7 @@ class FeedbackTransaction(Protocol):
 
     def target(self, household_id: int, record_id: int, member_id: int) -> MealTarget | None:
         """Read committed meal_records -> meal_sessions (household) and require
-        matching meal_record_items, meal_session_participants and members.household_id.
+        meal_session_participants and members.household_id; intake is not required.
         Return None for missing OR out-of-scope objects. Never create a meal.
         """
         ...
@@ -128,7 +128,7 @@ class FeedbackTransaction(Protocol):
     def save(self, feedback: Feedback, *, expected_revision: int) -> None:
         """Atomic compare-and-swap; absent row has revision 0.
 
-        UNIQUE(record_id, member_id), serialize absent-row races too. Persist the
+        UNIQUE(record_id), serialize absent-row races too. Persist the
         current snapshot only. Its evidence() is the canonical pending-mapping
         evidence; any derived projection must REPLACE all slots for this source
         in the same transaction (skip clears them). Never append on retries.
@@ -143,7 +143,7 @@ TransactionFactory = Callable[[], AbstractContextManager[FeedbackTransaction]]
 class MealFeedbackService:
     """Any recorded meal participant may respond; no designated evaluator.
 
-    Display and voice clients use the same member-scoped contract after resolving
+    Display and voice clients use the same meal-scoped evaluation after resolving
     the responding participant. A household session authorizes the shared device;
     it is not an assertion that the logged-in account is the responding member.
     Opting out before selecting a participant needs no service call.
@@ -201,13 +201,16 @@ class MealFeedbackService:
             if self.options is None:
                 raise FeedbackError('feedback_options_unconfigured', 503, '평가 선택지가 아직 확정되지 않았습니다.')
             self.options.validate(payload.ratings)
-        updated = Feedback(target, payload.status, payload.ratings, revision + 1,
+        # One evaluation per meal; edits by another participant keep the first
+        # respondent attribution and replace the same current facts.
+        updated = Feedback(current.target if current else target, payload.status, payload.ratings, revision + 1,
                            datetime.now(timezone.utc).isoformat())
         tx.save(updated, expected_revision=revision)
         return self._response(target, updated)
 
     @staticmethod
     def _response(target, current):
+        target = current.target if current else target
         return {
             'record_id': target.record_id, 'member_id': target.member_id,
             'recipe_id': target.recipe_id,
@@ -215,5 +218,6 @@ class MealFeedbackService:
             'ratings': current.ratings.model_dump() if current else Ratings().model_dump(),
             'revision': current.revision if current else 0,
             'updated_at': current.updated_at if current else None,
-            'personalization_status': 'pending_mapping' if current and current.evidence() else 'no_evidence',
+            'personalization_status': 'ready_for_next_recommendation' if current and current.evidence() else 'no_evidence',
+            'scope': 'meal',
         }

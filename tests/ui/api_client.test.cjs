@@ -28,6 +28,18 @@ const response = (body, status = 200) => ({
   json: async () => body,
 });
 
+test("meal feedback uses authenticated PUT and invalidates old recommendation", async () => {
+  const {api,calls}=client(path => identity(path) || response({record_id:7,member_id:3,scope:"meal",revision:1}));
+  await api.login("synthetic","synthetic-password",1);
+  api.state.result={status:"recommendations_available",recommendations:[]};
+  await api.saveFeedback(7,3,{status:"submitted",expected_revision:0,ratings:{taste:"taste_satisfied"}});
+  const saved=calls.at(-1);
+  assert.equal(saved.method,"PUT");
+  assert.equal(saved.headers.Authorization,"Bearer synthetic-token");
+  assert.equal(saved.body.expected_revision,0);
+  assert.equal(api.state.result,null);
+});
+
 function identity(path) {
   if (path === "/api/auth/login") return response({ access_token: "synthetic-token", household_id: 1,
     role: "owner", expires_at: Date.now()/1000 + 3600 });

@@ -18,7 +18,7 @@ def test_atomic_bundle_roles_grants_and_preserved_catalog():
             db.execute(f'ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY')
             db.execute(f'CREATE POLICY backend_catalog_access ON public.{table} TO service_role USING (true)')
         db.execute(build())
-        assert db.execute('SELECT count(*) FROM kini_private.schema_migrations').fetchone()[0] == 9
+        assert db.execute('SELECT count(*) FROM kini_private.schema_migrations').fetchone()[0] == 10
         owners = db.execute("SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname='kini_private'").fetchall()
         assert owners == [('kini_migrator',)]
         assert db.execute("SELECT count(*) FROM pg_tables WHERE schemaname='kini_private' AND NOT rowsecurity").fetchone()[0] == 0
@@ -45,4 +45,4 @@ def test_atomic_bundle_roles_grants_and_preserved_catalog():
         with pytest.raises(psycopg.errors.RaiseException):
             db.execute(build())
         db.execute('ROLLBACK')
-        assert db.execute('SELECT count(*) FROM kini_private.schema_migrations').fetchone()[0] == 9
+        assert db.execute('SELECT count(*) FROM kini_private.schema_migrations').fetchone()[0] == 10

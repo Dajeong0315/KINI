@@ -501,6 +501,7 @@
       ),
     );
     nutrition(p, r.nutrition_per_serving);
+    for (const advice of r.cooking_guidance || []) p.append(note(advice.message));
     quality(p, r);
     p.append(connectionState("pending", "이 메뉴의 상세 조리 순서는 연동 예정이에요."));
     const confirm = checkbox("실제 재료·분량 및 데이터 품질을 확인했습니다");
@@ -544,6 +545,7 @@
     );
     p.append(badge(c.planned_servings == null ? "계획 인분 미제공" : `계획 ${c.planned_servings}인분`, "positive"), note("서버 계산 1인분 영양"));
     quality(p, c);
+    for (const advice of r?.cooking_guidance || []) p.append(note(advice.message));
     nutrition(p, c.nutrition_per_serving);
     p.append(node("h3", "이번 조리에 사용할 총량"));
     for (const i of c.ingredients)
@@ -725,7 +727,7 @@
     form.onsubmit = (e) => {
       e.preventDefault();
       run(async () => {
-        await api.complete(
+        const saved = await api.complete(
           entries.map((x) => ({
             member_id: x.member.id,
             servings: Number(x.input.value || NaN),
@@ -740,6 +742,11 @@
         );
         go("report");
         await Promise.all([api.inventory(), reloadReports()]);
+        if (s.data?.feedbackEnabled) {
+          feedbackWindow("식사 기록 저장 완료", note("이 식사에 대한 평가를 남길까요? 참여자 중 누구나 한 번 평가할 수 있고 나중에 수정할 수 있습니다."),
+            button("평가하기", () => run(() => feedbackDialog({ record_id: saved.record_id })), "primary"),
+            button("평가 건너뛰기", closeDialog));
+        }
       });
     };
     intake.append(form);
@@ -935,7 +942,7 @@
       openDialog("영양 조회", content);
     });
   }
-  function feedbackDialog(receipt) {
+  function feedbackPreview(receipt) {
     const group = node("div", undefined, "feedback-preview");
     const names = receipt.items.map(item => s.household.members.find(member => member.id === item.member_id)?.name).filter(Boolean);
     for (const [label, choices] of [
@@ -962,6 +969,61 @@
     openDialog("식후 평가", note(`평가 대상 · ${receipt.name || "식사"} / ${names.join(", ") || "식사 구성원 미확인"}`),
       note("평가자는 저장 시 별도로 확인합니다."),
       connectionState("pending", "평가 저장과 다음 추천 반영은 서버 연동 후 제공돼요."), group, actions);
+  }
+  function feedbackWindow(title, ...children) {
+    openDialog(title, ...children);
+    // These new controls are created at the end of an async action. They are
+    // not in run()'s original control list and must become usable on arrival.
+    for (const control of $("#dialog-body").querySelectorAll("button")) control.disabled = false;
+  }
+  async function feedbackDialog(receipt) {
+    if (!s.data?.feedbackEnabled) return feedbackPreview(receipt);
+    const detail = await api.mealDetail(receipt.record_id);
+    const participants = detail.participants || [];
+    if (!participants.length) throw Error("식사 참여자를 확인할 수 없습니다.");
+    const existing = await api.feedback(receipt.record_id, participants[0].id);
+    const panel = node("div", undefined, "feedback-preview");
+    panel.append(note("이 식사에 공유되는 평가 1건입니다. 다른 참여자도 같은 평가를 조회·수정합니다."));
+    const respondent = field("응답하는 식사 참여자", {
+      value: existing.member_id,
+      options: participants.map(person => [person.id, person.name]),
+    });
+    respondent.input.disabled = existing.revision > 0;
+    panel.append(respondent.wrap);
+    if (existing.revision > 0) panel.append(note("최초 응답자는 유지되며, 수정은 같은 평가를 대체합니다."));
+    const ratings = { ...existing.ratings };
+    for (const [dimension, label, choices] of [
+      ["taste", "맛", [["taste_dissatisfied", "별로예요"], ["taste_neutral", "보통이에요"], ["taste_satisfied", "맛있어요"]]],
+      ["seasoning", "간", [["seasoning_bland", "싱거워요"], ["seasoning_balanced", "적당해요"], ["seasoning_salty", "짜요"]]],
+      ["difficulty", "난이도", [["difficulty_easy", "쉬웠어요"], ["difficulty_moderate", "보통이에요"], ["difficulty_hard", "어려웠어요"]]],
+    ]) {
+      const section = node("section");
+      section.setAttribute("aria-label", label);
+      section.append(node("h3", label));
+      const row = node("div", undefined, "button-row");
+      const controls = [];
+      for (const [code, text] of [...choices, [null, "이 항목 건너뛰기"]]) {
+        const choice = button(text, () => {
+          ratings[dimension] = code;
+          for (const [value, element] of controls) element.setAttribute("aria-pressed", String(value === code));
+        }, "filter");
+        choice.setAttribute("aria-pressed", String((ratings[dimension] || null) === code));
+        controls.push([code, choice]); row.append(choice);
+      }
+      section.append(row); panel.append(section);
+    }
+    panel.append(note("맛은 이 메뉴의 추천 순위에, 간·난이도는 조리 안내에만 반영합니다. 안전·영양 제한은 유지합니다."));
+    const save = button(existing.status === "submitted" ? "평가 수정 저장" : "평가 저장", () => run(async () => {
+      if (!Object.values(ratings).some(Boolean)) throw Error("평가할 항목을 하나 이상 선택하거나 건너뛰어 주세요.");
+      const result = await api.saveFeedback(receipt.record_id, Number(respondent.input.value), {
+        status: "submitted", expected_revision: existing.revision, ratings,
+      });
+      feedbackWindow("평가 저장 완료", note("이 식사의 평가를 저장했습니다. 다음 추천부터 반영하며 수정·재시도로 평가 횟수가 늘어나지 않습니다."),
+        note(`평가 버전 ${result.revision}`), button("닫기", closeDialog));
+    }), "primary");
+    panel.append(save, button(existing.revision > 0 ? "닫기 · 기존 평가 유지" : "평가 건너뛰기", closeDialog),
+      button("최신 평가 다시 불러오기", () => run(() => feedbackDialog(receipt))));
+    feedbackWindow(existing.status === "submitted" ? "식후 평가 수정" : "식후 평가", panel);
   }
   function reportParams(offset = 0) {
     return { period: reportPeriod, member_id: reportMember === "all" ? null : reportMember, offset };
@@ -1050,7 +1112,7 @@
       row.append(note("선택한 구성원의 저장된 실제 섭취 영양 합계"));
       nutrition(row, r.nutrition_totals);
       row.append(button("기록 상세", () => run(() => openMealDetail(r.record_id))));
-      row.append(button("식후 평가", () => feedbackDialog({ ...r, name: r.recipe_name })));
+      row.append(button("식후 평가", () => run(() => feedbackDialog({ ...r, name: r.recipe_name }))));
       p.append(row);
     }
     const pages = node("div", undefined, "button-row");

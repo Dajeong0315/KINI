@@ -313,7 +313,7 @@ def test_feedback_bounded_put_approved_codes_and_missing_options(store, monkeypa
     monkeypatch.setenv('KINI_MEAL_FEEDBACK_OPTIONS_FILE', str(options))
     assert client.get('/health/ready').status_code == 200
     saved = client.put(path, json=body, headers=headers)
-    assert saved.status_code == 200 and saved.json['personalization_status'] == 'pending_mapping'
+    assert saved.status_code == 200 and saved.json['personalization_status'] == 'ready_for_next_recommendation'
     assert client.put(path, json=body, headers=headers).json == saved.json
     assert client.get(path, headers=headers).json == saved.json
     bad = body | {'expected_revision': 1, 'ratings': {'taste': 'mock_taste_a'}}

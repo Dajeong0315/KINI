@@ -288,6 +288,28 @@ REVOKE ALL ON public_catalog_ingredient_links FROM PUBLIC;
 
 INSERT INTO schema_migrations(version) VALUES ('009_public_catalog_links') ON CONFLICT DO NOTHING;
 
+-- 010_meal_feedback.sql SHA256 445651ad6aa094bf885db8287e4141c3b450ac10deff25b5c5417af88c92beb4
+-- One current evaluation per saved meal; edits replace it.
+-- Feature-owned schema candidate. Explicit setup only, never request-time DDL.
+-- Requires existing A meal/member tables. Does not alter them.
+CREATE TABLE meal_feedback (
+    record_id BIGINT NOT NULL REFERENCES meal_records(id),
+    member_id BIGINT NOT NULL REFERENCES members(id),
+    status TEXT NOT NULL CHECK (status IN ('submitted', 'skipped')),
+    taste TEXT,
+    seasoning TEXT,
+    difficulty TEXT,
+    revision BIGINT NOT NULL CHECK (revision > 0),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (record_id),
+    CHECK (
+        (status = 'skipped' AND taste IS NULL AND seasoning IS NULL AND difficulty IS NULL)
+        OR (status = 'submitted' AND (taste IS NOT NULL OR seasoning IS NOT NULL OR difficulty IS NOT NULL))
+    )
+);
+
+INSERT INTO schema_migrations(version) VALUES ('010_meal_feedback') ON CONFLICT DO NOTHING;
+
 -- Non-exposed schema plus RLS: only the dedicated backend role is admitted.
 -- Household isolation remains the server's authenticated object checks.
 DO $rls$ DECLARE t record; BEGIN
@@ -302,6 +324,8 @@ REVOKE ALL ON ALL SEQUENCES IN SCHEMA kini_private FROM PUBLIC, anon, authentica
 GRANT USAGE ON SCHEMA kini_private, public TO kini_app;
 GRANT SELECT ON ALL TABLES IN SCHEMA kini_private TO kini_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA kini_private TO kini_app;
+GRANT INSERT ON kini_private.meal_data_context TO kini_app;
+GRANT INSERT, UPDATE ON kini_private.meal_feedback TO kini_app;
 GRANT INSERT, UPDATE, DELETE ON kini_private.households,kini_private.members,kini_private.local_accounts,kini_private.account_households,kini_private.auth_sessions,kini_private.local_account_sessions,kini_private.member_preferences,kini_private.member_allergies,kini_private.member_health_constraints,kini_private.member_nutrition_targets,kini_private.inventory_items,kini_private.inventory_events,kini_private.inventory_sync_state,kini_private.inventory_event_changes,kini_private.meal_sessions,kini_private.meal_session_participants,kini_private.meal_records,kini_private.meal_record_items,kini_private.nutrition_intakes,kini_private.recommendation_requests,kini_private.recommendation_candidates,kini_private.recommendation_feedback,kini_private.preference_evidence,kini_private.inferred_preferences,kini_private.household_behavior_summary,kini_private.cooking_sessions,kini_private.cooking_inventory_event_links TO kini_app;
 GRANT SELECT ON public.data_sources TO kini_app;
 CREATE POLICY kini_app_catalog_read ON public.data_sources FOR SELECT TO kini_app USING (true);

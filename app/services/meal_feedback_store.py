@@ -70,25 +70,24 @@ class SqlFeedbackTransaction:
         if postgres and self.write:
             # Covers absent-row races too. Authorization locks precede this lock.
             self.db.execute('SELECT pg_advisory_xact_lock(hashtextextended(?,0))',
-                            (f'kini:meal_feedback:{record_id}:{member_id}',))
-        lock = ' FOR SHARE OF r,s,i,p,m' if postgres and self.write else ''
-        row = self.db.execute('''SELECT r.id record_id,i.member_id,s.household_id,r.recipe_id
+                            (f'kini:meal_feedback:{record_id}',))
+        lock = ' FOR SHARE OF r,s,p,m' if postgres and self.write else ''
+        row = self.db.execute('''SELECT r.id record_id,p.member_id,s.household_id,r.recipe_id
             FROM meal_records r JOIN meal_sessions s ON s.id=r.session_id
-            JOIN meal_record_items i ON i.record_id=r.id
-            JOIN meal_session_participants p ON p.session_id=s.id AND p.member_id=i.member_id
-            JOIN members m ON m.id=i.member_id AND m.household_id=s.household_id
-            WHERE s.household_id=? AND r.id=? AND i.member_id=?''' + lock,
+            JOIN meal_session_participants p ON p.session_id=s.id
+            JOIN members m ON m.id=p.member_id AND m.household_id=s.household_id
+            WHERE s.household_id=? AND r.id=? AND p.member_id=?''' + lock,
                               (household_id, record_id, member_id)).fetchone()
         return MealTarget(**dict(row)) if row else None
 
     def get(self, target):
-        row = self.db.execute('''SELECT status,taste,seasoning,difficulty,revision,updated_at
-            FROM meal_feedback WHERE record_id=? AND member_id=?''',
-                              (target.record_id, target.member_id)).fetchone()
+        row = self.db.execute('''SELECT member_id,status,taste,seasoning,difficulty,revision,updated_at
+            FROM meal_feedback WHERE record_id=?''', (target.record_id,)).fetchone()
         if row is None:
             return None
         try:
-            return Feedback(target, row['status'], Ratings(**{k: row[k] for k in ('taste', 'seasoning', 'difficulty')}),
+            original = MealTarget(target.record_id, row['member_id'], target.household_id, target.recipe_id)
+            return Feedback(original, row['status'], Ratings(**{k: row[k] for k in ('taste', 'seasoning', 'difficulty')}),
                             row['revision'], row['updated_at'])
         except (ValueError, TypeError) as error:
             # Invalid stored data is a storage failure, not bad client input.
@@ -103,7 +102,7 @@ class SqlFeedbackTransaction:
         if expected_revision == 0:
             cursor = self.db.execute('''INSERT INTO meal_feedback
                 (status,taste,seasoning,difficulty,revision,updated_at,record_id,member_id)
-                VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(record_id,member_id) DO NOTHING''', values)
+                VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(record_id) DO NOTHING''', values)
         else:
             cursor = self.db.execute('''UPDATE meal_feedback SET
                 status=?,taste=?,seasoning=?,difficulty=?,revision=?,updated_at=?

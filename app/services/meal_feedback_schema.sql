@@ -9,7 +9,7 @@ CREATE TABLE meal_feedback (
     difficulty TEXT,
     revision BIGINT NOT NULL CHECK (revision > 0),
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (record_id, member_id),
+    PRIMARY KEY (record_id),
     CHECK (
         (status = 'skipped' AND taste IS NULL AND seasoning IS NULL AND difficulty IS NULL)
         OR (status = 'submitted' AND (taste IS NOT NULL OR seasoning IS NOT NULL OR difficulty IS NOT NULL))

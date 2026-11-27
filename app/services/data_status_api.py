@@ -1,5 +1,6 @@
 from contextlib import closing
 from functools import wraps
+import os
 from flask import Blueprint, jsonify, request
 from pydantic import ValidationError
 from .recommendation_repository import open_db
@@ -15,6 +16,7 @@ def data_status():
         mode = db.execute("SELECT value FROM metadata WHERE key='dataset_mode'").fetchone()
         releases = [dict(r) for r in db.execute('SELECT source_code,release_id,cache_version FROM active_data_releases ORDER BY source_code')]
     return jsonify({'dataset_mode': mode[0] if mode else 'demo', 'releases': releases,
+                    'meal_feedback_enabled': os.getenv('KINI_B_MEAL_FEEDBACK_ENABLED','0') == '1',
                     'catalog_projection': 'not_connected_to_recommendation_engine',
                     'supabase': {'purpose': 'public_food_catalog_and_daily_metrics', 'automatic_export_enabled': False,
                                  'catalog_sync_enabled': False},

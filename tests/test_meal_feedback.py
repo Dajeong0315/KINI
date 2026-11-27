@@ -47,22 +47,21 @@ class FakeStore:
         return Identity(row['household_id'], row['role'])
 
     def target(self, household_id, record_id, member_id):
-        row = self.db.execute('''SELECT r.id record_id, i.member_id, s.household_id, r.recipe_id
+        row = self.db.execute('''SELECT r.id record_id, p.member_id, s.household_id, r.recipe_id
             FROM meal_records r JOIN meal_sessions s ON s.id=r.session_id
-            JOIN meal_record_items i ON i.record_id=r.id
-            JOIN meal_session_participants p ON p.session_id=s.id AND p.member_id=i.member_id
-            JOIN members m ON m.id=i.member_id AND m.household_id=s.household_id
-            WHERE s.household_id=? AND r.id=? AND i.member_id=?''',
+            JOIN meal_session_participants p ON p.session_id=s.id
+            JOIN members m ON m.id=p.member_id AND m.household_id=s.household_id
+            WHERE s.household_id=? AND r.id=? AND p.member_id=?''',
                               (household_id, record_id, member_id)).fetchone()
         return MealTarget(**dict(row)) if row else None
 
     def get(self, target):
         if self.fail == 'read':
             raise OSError('synthetic read failure')
-        return self.rows.get((target.record_id, target.member_id))
+        return self.rows.get(target.record_id)
 
     def save(self, feedback, *, expected_revision):
-        key = (feedback.target.record_id, feedback.target.member_id)
+        key = feedback.target.record_id
         old = self.rows.get(key)
         if self.fail == 'race' or (old.revision if old else 0) != expected_revision:
             raise FeedbackError('revision_conflict', 409, '다시 조회하세요.')
@@ -72,8 +71,8 @@ class FakeStore:
         self.saves += 1
 
     def evidence(self):
-        return {(record_id, member_id, dimension): code
-                for (record_id, member_id), row in self.rows.items()
+        return {(record_id, row.target.member_id, dimension): code
+                for record_id, row in self.rows.items()
                 for dimension, code in row.evidence()}
 
 
@@ -108,7 +107,7 @@ def test_normal_duplicate_edit_and_skip_replace_evidence(context):
     assert service.get(token, 201, 1)['status'] == 'not_submitted'
     first = put(service, token, ratings={'taste': 'taste_satisfied', 'seasoning': 'seasoning_balanced'})
     assert first['revision'] == 1 and first['recipe_id'] == 1
-    assert first['personalization_status'] == 'pending_mapping'
+    assert first['personalization_status'] == 'ready_for_next_recommendation'
     assert put(service, token, ratings={'taste': 'taste_satisfied', 'seasoning': 'seasoning_balanced'}) == first
     assert store.saves == 1 and len(store.evidence()) == 2
     edited = put(service, token, revision=1, ratings={'difficulty': 'difficulty_moderate'})
@@ -133,19 +132,15 @@ def test_skip_without_options_or_previous_evidence(context):
     assert service.get(token, 201, 1) == result
 
 
-def test_shared_device_allows_participants_independently_without_designated_evaluator(context):
+def test_shared_meal_has_one_editable_evaluation(context):
     service, store, token, _ = context
-    # One authenticated household device, two responding participants. Skipping
-    # for one participant must not close evaluation for the whole meal.
-    put(service, token, status='skipped', ratings={})
-    second = put(service, token, member_id=2)
-    assert second['status'] == 'submitted'
-    assert service.get(token, 201, 1)['status'] == 'skipped'
-    assert store.evidence() == {(201, 2, 'taste'): 'taste_satisfied'}
-    # The first participant may choose to respond later, without reassignment.
-    put(service, token, revision=1)
-    assert len(store.evidence()) == 2
-    assert service.get(token, 201, 2) == second
+    first = put(service, token)
+    assert service.get(token, 201, 2) == first
+    assert put(service, token, member_id=2) == first
+    edited = put(service, token, member_id=2, revision=1, ratings={'taste':'taste_dissatisfied'})
+    assert edited['member_id'] == 1 and edited['revision'] == 2
+    assert len(store.rows) == 1 and len(store.evidence()) == 1
+    assert service.get(token, 201, 1) == edited
 
 
 @pytest.mark.parametrize('record_id,member_id', [(999, 1), (202, 900), (201, 900), (201, 999), (201, 3)])
@@ -159,12 +154,11 @@ def test_missing_foreign_and_nonparticipant_targets(context, record_id, member_i
     assert not store.rows
 
 
-def test_session_participant_without_saved_item_is_not_target(context):
+def test_session_participant_without_intake_can_evaluate(context):
     service, store, token, _ = context
     with store.db:
         store.db.execute('DELETE FROM meal_record_items WHERE record_id=201 AND member_id=2')
-    with pytest.raises(FeedbackError):
-        put(service, token, member_id=2)
+    assert put(service, token, member_id=2)['status'] == 'submitted'
 
 
 @pytest.mark.parametrize('payload', [
@@ -189,15 +183,14 @@ def test_invalid_payload_rejected(context, payload):
     assert store.saves == 0
 
 
-def test_unknown_option_rejected_and_member_slots_independent(context):
+def test_unknown_option_rejected_and_zero_portions_share_one_slot(context):
     service, store, token, _ = context
     with pytest.raises(ValueError):
         put(service, token, ratings={'taste': 'not_approved'})
     put(service, token)
-    # Zero servings eligibility has no additional invented policy: a persisted
-    # participant/item is accepted. Planner must confirm this before routing.
+    # All meal participants, including zero portions, share the same evaluation.
     put(service, token, member_id=2)
-    assert len(store.evidence()) == 2
+    assert len(store.evidence()) == 1
 
 
 def test_revision_conflict_and_stale_retry_cannot_restore_old_evidence(context):

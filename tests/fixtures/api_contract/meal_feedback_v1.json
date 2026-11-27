@@ -1,12 +1,12 @@
 {
-  "contract_status": "implemented_in_isolated_app_not_deployed",
+  "contract_status": "meal_scoped_one_current_evaluation_with_edits",
   "path": "/api/meal-records/201/participants/1/feedback",
   "method": "PUT",
   "headers": {
     "Authorization": "Bearer <household-session-token>",
     "Content-Type": "application/json"
   },
-  "notice": "C UI synthetic response examples; option codes use approved product mapping, not mock/test codes. Runtime routes require explicit enablement after schema and grants. updated_at and IDs are synthetic.",
+  "notice": "One current evaluation per meal. Participant path verifies eligibility; participants share and edit the same revision. Initial skip/close does not PUT. Synthetic examples; production requires migration and enablement.",
   "examples": {
     "normal": {
       "http_status": 200,
@@ -28,8 +28,9 @@
           "difficulty": null
         },
         "revision": 1,
-        "personalization_status": "pending_mapping",
-        "updated_at": "2026-11-27T09:00:00+00:00"
+        "personalization_status": "ready_for_next_recommendation",
+        "updated_at": "2026-11-27T09:00:00+00:00",
+        "scope": "meal"
       }
     },
     "duplicate": {
@@ -52,8 +53,9 @@
           "difficulty": null
         },
         "revision": 1,
-        "personalization_status": "pending_mapping",
-        "updated_at": "2026-11-27T09:00:00+00:00"
+        "personalization_status": "ready_for_next_recommendation",
+        "updated_at": "2026-11-27T09:00:00+00:00",
+        "scope": "meal"
       }
     },
     "edit": {
@@ -77,8 +79,9 @@
           "difficulty": "difficulty_moderate"
         },
         "revision": 2,
-        "personalization_status": "pending_mapping",
-        "updated_at": "2026-11-27T09:01:00+00:00"
+        "personalization_status": "ready_for_next_recommendation",
+        "updated_at": "2026-11-27T09:01:00+00:00",
+        "scope": "meal"
       }
     },
     "skip": {
@@ -99,7 +102,8 @@
         },
         "revision": 3,
         "personalization_status": "no_evidence",
-        "updated_at": "2026-11-27T09:02:00+00:00"
+        "updated_at": "2026-11-27T09:02:00+00:00",
+        "scope": "meal"
       }
     },
     "not_submitted": {
@@ -117,7 +121,8 @@
         },
         "revision": 0,
         "personalization_status": "no_evidence",
-        "updated_at": null
+        "updated_at": null,
+        "scope": "meal"
       }
     },
     "invalid": {
@@ -258,5 +263,6 @@
       "difficulty_moderate",
       "difficulty_hard"
     ]
-  }
+  },
+  "scope": "meal"
 }

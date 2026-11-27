@@ -45,7 +45,7 @@ SET LOCAL ROLE kini_migrator;
 SET LOCAL search_path = kini_private, pg_catalog;
 '''
     migrations = sorted((ROOT / 'db/migrations').glob('*.sql'))
-    if len(migrations) != 9:
+    if len(migrations) != 10:
         raise ValueError('Review a new migration set before deployment')
     for path in migrations:
         contents = path.read_text(encoding='utf-8')
@@ -68,6 +68,7 @@ GRANT USAGE ON SCHEMA kini_private, public TO kini_app;
 GRANT SELECT ON ALL TABLES IN SCHEMA kini_private TO kini_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA kini_private TO kini_app;
 GRANT INSERT ON kini_private.meal_data_context TO kini_app;
+GRANT INSERT, UPDATE ON kini_private.meal_feedback TO kini_app;
 '''
     sql += 'GRANT INSERT, UPDATE, DELETE ON ' + ','.join('kini_private.'+t for t in WRITE_TABLES) + ' TO kini_app;\n'
     # Policies apply only to the new backend role. Existing public rows,

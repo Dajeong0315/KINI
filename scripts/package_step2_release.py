@@ -14,7 +14,7 @@ ALLOWED={'.py','.json','.sql','.md','.txt','.service','.conf','.sh','.in','.js',
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--stage',choices=['step2','step3','step5'],default='step2')
+    parser.add_argument('--stage',choices=['step2','step3','step5','step6'],default='step2')
     args=parser.parse_args()
     files={}
     for directory in ('app','config','db','deploy','scripts'):

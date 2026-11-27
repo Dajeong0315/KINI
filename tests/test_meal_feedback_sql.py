@@ -74,7 +74,8 @@ def sql_context(request, tmp_path, monkeypatch):
                     with db.cursor() as cursor:
                         cursor.execute(migration.read_text(encoding='utf-8'))
                 db.commit()
-            install(db)
+            if request.param == 'sqlite':
+                install(db)
             db.commit()
             # Use IDs outside demo family, no real meals or raw voice data.
             db.execute("INSERT INTO households(id,name) VALUES (901,'synthetic-feedback'),(902,'synthetic-foreign')")
@@ -117,12 +118,12 @@ def test_http_persistence_restart_retry_edit_and_skip(sql_context):
     assert client.put(target(), json=body(), headers=auth(token)).status_code == 409
     skipped = client.put(target(), json={'status': 'skipped', 'expected_revision': 2}, headers=auth(token))
     assert skipped.status_code == 200 and skipped.json['personalization_status'] == 'no_evidence'
-    second = client.put(target(903), json=body(), headers=auth(token))
+    second = client.put(target(903), json=body(3), headers=auth(token))
     assert second.status_code == 200
     with closing(connect()) as db:
-        assert db.execute('SELECT count(*) FROM meal_feedback').fetchone()[0] == 2
+        assert db.execute('SELECT count(*) FROM meal_feedback').fetchone()[0] == 1
         row = db.execute('SELECT * FROM meal_feedback WHERE member_id=901').fetchone()
-        assert row['taste'] is None and row['revision'] == 3
+        assert row['taste'] == 'test_taste_a' and row['revision'] == 4
         assert db.execute("SELECT count(*) FROM preference_evidence WHERE source_type='meal_feedback'").fetchone()[0] == 0
 
 
@@ -207,7 +208,7 @@ def test_real_http_concurrent_duplicate_and_conflicting_updates(sql_context):
                                 {'status': 'skipped', 'expected_revision': 1}])
         assert sorted(status for status, _ in competing) == [200, 409]
         with closing(connect()) as db:
-            assert db.execute('SELECT count(*) FROM meal_feedback').fetchone()[0] == 2
+            assert db.execute('SELECT count(*) FROM meal_feedback').fetchone()[0] == 1
             assert db.execute('SELECT revision FROM meal_feedback WHERE member_id=901').fetchone()[0] == 2
     finally:
         server.shutdown()
@@ -257,6 +258,32 @@ def test_no_fake_fallback_or_runtime_schema_creation(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError):
         feedback_connection()
     assert not missing.exists()
+
+
+def test_first_submit_race_between_meal_participants_is_one_row(sql_context):
+    app, connect, token, _ = sql_context
+    barrier = Barrier(2)
+    payloads = [body(code='test_taste_a'), body(code='test_taste_b')]
+    def submit(index):
+        barrier.wait(timeout=5)
+        response = app.test_client().put(target([901,903][index]), json=payloads[index], headers=auth(token))
+        return response.status_code, response.json
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, [0,1]))
+    assert sorted(status for status, _ in results) == [200,409]
+    winner = next(index for index, result in enumerate(results) if result[0] == 200)
+    assert app.test_client().put(target([903,901][winner]), json=payloads[winner], headers=auth(token)).json == results[winner][1]
+    with closing(connect()) as db:
+        assert db.execute('SELECT count(*) FROM meal_feedback').fetchone()[0] == 1
+
+
+def test_participant_without_intake_can_share_evaluation(sql_context):
+    app, connect, token, _ = sql_context
+    with closing(connect()) as db, db:
+        db.execute('DELETE FROM meal_record_items WHERE record_id=201 AND member_id=903')
+    first = app.test_client().put(target(903), json=body(), headers=auth(token))
+    assert first.status_code == 200
+    assert app.test_client().get(target(901), headers=auth(token)).json == first.json
 
 
 def test_explicit_approved_option_file(monkeypatch, tmp_path):

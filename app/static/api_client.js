@@ -46,7 +46,7 @@
       ).join("");
       return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
     }
-    async function request(path, body, authenticated = path !== "/api/auth/login" && Boolean(token)) {
+    async function request(path, body, authenticated = path !== "/api/auth/login" && Boolean(token), method) {
       if (authenticated && (!token || Date.now() >= state.session.expiresAt)) {
         clearSession();
         throw new APIError("다시 로그인해 주세요.", 401);
@@ -56,7 +56,7 @@
       const issuedEpoch = sessionEpoch;
       try {
         const r = await fetchImpl(path, {
-          method: body === undefined ? "GET" : "POST",
+          method: method || (body === undefined ? "GET" : "POST"),
           headers: {
             Accept: "application/json",
             ...(authenticated ? { Authorization: `Bearer ${token}` } : {}),
@@ -198,6 +198,7 @@
         releases: v[0].status === "fulfilled" ? v[0].value : null,
         quality: v[1].status === "fulfilled" ? v[1].value : null,
         datasetMode: v[2].status === "fulfilled" ? v[2].value.dataset_mode : null,
+        feedbackEnabled: v[2].status === "fulfilled" && v[2].value.meal_feedback_enabled === true,
       };
       return state.data;
     }
@@ -541,6 +542,15 @@
       inventory,
       loadReports,
       mealDetail,
+      feedback(recordId, memberId) {
+        return request(`/api/meal-records/${recordId}/participants/${memberId}/feedback`, undefined, true);
+      },
+      async saveFeedback(recordId, memberId, payload) {
+        unlocked();
+        const result = await request(`/api/meal-records/${recordId}/participants/${memberId}/feedback`, payload, true, "PUT");
+        invalidate();
+        return result;
+      },
       selectMembers(ids) {
         unlocked();
         if (
