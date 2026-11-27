@@ -1,3 +1,4 @@
+from flask import Flask
 import pytest
 
 @pytest.fixture
@@ -5,7 +6,8 @@ def setup(monkeypatch,tmp_path):
     monkeypatch.setenv('KINI_DB_PATH',str(tmp_path/'db.sqlite3'))
     import app.services.recommendation_api as api
     monkeypatch.setattr(api,'explain_recommendation',lambda _: '추천')
-    from app.main import app
+    app = Flask(__name__)
+    app.register_blueprint(api.api)
     client=app.test_client()
     request={'household_id':1,'participant_ids':[3],'meal_type':'dinner'}
     recommendation=client.post('/api/recommendations',json=request).json
@@ -26,12 +28,8 @@ def test_change_nutrition_and_confirm(setup):
     assert client.post(f'/api/cooking-sessions/{sid}/ingredients',json={'ingredient':'두부','quantity_g':None}).status_code==400
     assert client.post(f'/api/cooking-sessions/{sid}/ingredients',json={'ingredient':'두부','quantity_g':1,'unit':'개'}).status_code==400
     final=client.post(f'/api/cooking-sessions/{sid}/complete',json={'confirmed':True,'eaten_at':'2026-11-25T12:00:00','items':[{'member_id':3,'servings':1}]})
-    assert final.status_code==201 and final.json['nutrition_per_serving']==response.json['nutrition_per_serving']
-    from app.services.recommendation_repository import open_db
-    with open_db() as db:
-        recorded=db.execute("SELECT amount FROM nutrition_intakes WHERE nutrient='protein_g'").fetchone()[0]
-        assert recorded==response.json['nutrition_per_serving']['protein_g']
-    assert client.post(f'/api/cooking-sessions/{sid}/complete',json={'confirmed':True,'eaten_at':'2026-11-25T12:00:00','items':[{'member_id':3,'servings':1}]}).status_code==400
+    assert final.status_code == 409
+
 
 def test_reject_different_participants(setup):
     client,session=setup

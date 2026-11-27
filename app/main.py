@@ -23,6 +23,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+# Keep the page template in sync with static assets during local UI edits.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".ogg", ".mp4"}
 
 
@@ -75,8 +77,11 @@ def _answer_question(question: str) -> dict[str, object]:
 
 
 @app.get("/")
+@app.get("/fridge")
+@app.get("/mobile")
 def index():
-    return render_template("index.html", model=configured_model())
+    device_mode = {"/fridge": "fridge", "/mobile": "mobile"}.get(request.path, "auto")
+    return render_template("index.html", model=configured_model(), device_mode=device_mode)
 
 
 @app.get("/api/inventory")
@@ -172,6 +177,14 @@ def file_too_large(_error):
 
 from app.services.recommendation_api import api as recommendation_api
 app.register_blueprint(recommendation_api)
+from app.services.data_status_api import api as data_status_api
+app.register_blueprint(data_status_api)
+from app.services.local_auth_api import api as local_auth_api
+app.register_blueprint(local_auth_api)
+from app.services.family_api import api as family_api
+app.register_blueprint(family_api)
+from app.services.meal_reporting_api import api as meal_reports_api
+app.register_blueprint(meal_reports_api)
 
 
 if __name__ == "__main__":

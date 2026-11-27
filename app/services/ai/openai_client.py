@@ -40,6 +40,11 @@ class HttpOpenAIRecommendationClient:
         self.timeout_seconds = timeout_seconds
 
     def explain(self, payload: dict[str, Any]) -> AIExplanation:
+        from .wire_schema import OutboundRecommendation
+        try:
+            payload = OutboundRecommendation.model_validate(payload).model_dump(exclude_unset=True)
+        except ValueError:
+            raise OpenAIClientError("External payload rejected") from None
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise OpenAIClientError("OPENAI_API_KEY is not configured")

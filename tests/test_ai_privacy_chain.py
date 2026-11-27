@@ -103,7 +103,7 @@ def test_http_adapter_transport_failures_raise_openai_client_error(monkeypatch, 
     monkeypatch.setenv("OPENAI_RECOMMENDATION_MODEL", "test-model")
     monkeypatch.setattr(openai_client.request, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(failure))
     with pytest.raises(OpenAIClientError):
-        HttpOpenAIRecommendationClient().explain({"validated_candidates": []})
+        HttpOpenAIRecommendationClient().explain(PrivacyGateway().prepare(_request(), _rules()).payload)
 
 
 def test_http_adapter_malformed_response_raises_openai_client_error(monkeypatch):
@@ -115,7 +115,7 @@ def test_http_adapter_malformed_response_raises_openai_client_error(monkeypatch)
     monkeypatch.setenv("OPENAI_RECOMMENDATION_MODEL", "test-model")
     monkeypatch.setattr(openai_client.request, "urlopen", lambda *_args, **_kwargs: Response())
     with pytest.raises(OpenAIClientError):
-        HttpOpenAIRecommendationClient().explain({"validated_candidates": []})
+        HttpOpenAIRecommendationClient().explain(PrivacyGateway().prepare(_request(), _rules()).payload)
 
 
 def test_recommendation_and_voice_api_send_opaque_payloads(monkeypatch, tmp_path):
@@ -237,3 +237,11 @@ def test_voice_api_error_cannot_be_retrieved_as_recommendation(monkeypatch, tmp_
     assert response['status'] == 'api_error' and response['recommendations'] == []
     saved = client.get(f"/api/recommendations/{response['request_id']}").json
     assert saved['status'] == 'api_error' and saved['recommendations'] == []
+
+@pytest.mark.parametrize("field", ["name","device_id","warning","session_token","transcript","health_details"])
+def test_http_adapter_blocks_nested_fields_before_transport(monkeypatch, field):
+    payload = PrivacyGateway().prepare(_request(), _rules()).payload
+    payload["validated_candidates"][0][field] = "synthetic"
+    monkeypatch.setattr(openai_client.request, "urlopen", lambda *_a, **_kw: pytest.fail("unexpected transport"))
+    with pytest.raises(OpenAIClientError, match="External payload rejected"):
+        HttpOpenAIRecommendationClient().explain(payload)

@@ -1,0 +1,12 @@
+{
+  "event_id": 1,
+  "client_event_id": "550e8400-e29b-41d4-a716-446655440000",
+  "source": "mock",
+  "is_demo": true,
+  "action": "stock_in",
+  "detected_label": "두부",
+  "confidence": 0.99,
+  "status": "pending_confirmation",
+  "requires_confirmation": true,
+  "inventory_item_id": null
+}

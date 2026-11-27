@@ -1,0 +1,29 @@
+{
+  "policy_version": 1,
+  "database_quota_bytes": 500000000,
+  "target_bytes": 300000000,
+  "warning_bytes": 350000000,
+  "stop_bytes": 400000000,
+  "reserve_bytes": 8000000,
+  "max_batch_rows": 100,
+  "max_batch_payload_bytes": 256000,
+  "payload_expansion_factor": 4,
+  "max_provenance_payload_bytes": 2048,
+  "retained_published_releases_per_source": 2,
+  "store_binary_media": false,
+  "store_full_raw_payload_in_cloud": false,
+  "create_vector_embeddings": false,
+  "allocation_bytes": {
+    "system": 30000000,
+    "food_nutrition": 80000000,
+    "recipes": 40000000,
+    "catalog_shared_and_search": 80000000,
+    "fridge_change_reserve": 150000000,
+    "operational_metrics": 20000000,
+    "import_and_rollback_buffer": 50000000,
+    "safety_margin": 50000000
+  },
+  "catalog_pool_bytes": 200000000,
+  "fridge_raw_history_location": "local_sqlite",
+  "cloud_fridge_reserve_usage": "unallocated_until_non_personal_schema_review"
+}

@@ -1,4 +1,4 @@
-﻿from typing import List, Optional
+﻿from typing import Annotated, List, Optional
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Literal
 
@@ -65,10 +65,17 @@ class CookingChangeRequest(BaseModel):
     ingredient: str = Field(min_length=1, max_length=100)
     quantity_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
 
+class CookingMealItem(BaseModel):
+    member_id: int = Field(gt=0)
+    servings: float = Field(ge=0, le=10, allow_inf_nan=False)
+
 class CookingCompleteRequest(BaseModel):
     confirmed: Literal[True]
     eaten_at: str
-    items: List[MealRecordItem] = Field(min_length=1)
+    items: List[CookingMealItem] = Field(min_length=1)
+    inventory_event_ids: list[Annotated[int, Field(gt=0, strict=True)]] = Field(
+        default_factory=list, max_length=100
+    )
 
 class CookingQuestionRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)

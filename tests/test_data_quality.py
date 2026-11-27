@@ -62,14 +62,29 @@ def test_ingredient_specific_conversion_requires_evidence(db):
     assert convert_quantity(db,1,'컵',1)['quantity_g']==200
     assert convert_quantity(db,1,'컵',2)['quantity_g'] is None
 
+
+def test_conflicting_conversion_evidence_requires_manual_mass(db):
+    db.executemany("INSERT INTO unit_conversions(ingredient_id,from_unit,to_unit,factor,confidence,source_type) VALUES (1,'컵','g',?,.99,'verified_product')",[(200,),(250,)])
+    assert convert_quantity(db,1,'컵',1)['quantity_g'] is None
+
+
+def test_conversion_overflow_does_not_return_infinite_grams(db):
+    db.execute("INSERT INTO unit_conversions(ingredient_id,from_unit,to_unit,factor,confidence,source_type) VALUES (1,'컵','g',1e308,.99,'verified_product')")
+    assert convert_quantity(db,2,'컵',1)['quantity_g'] is None
+
 def test_inventory_api(monkeypatch,tmp_path):
     monkeypatch.setenv('KINI_DB_PATH',str(tmp_path/'api.sqlite3'))
     from app.main import app
     client=app.test_client()
     result=client.post('/api/inventory/normalize',json={'name':'당근 1개','quantity':1,'unit':'개'}).json
     assert result['ingredient']['canonical_name']=='당근' and result['requires_confirmation']
-    assert client.post('/api/inventory/items',json={'household_id':1,'ingredient_id':3,'name':'당근','quantity':1,'unit':'개'}).status_code==400
-    added=client.post('/api/inventory/items',json={'household_id':1,'ingredient_id':3,'name':'당근','quantity':1,'unit':'kg'})
+    assert client.post('/api/inventory/items',json={'household_id':1,'ingredient_id':3,'name':'당근','quantity':1,'unit':'개'}).status_code==401
+    from app.services.local_identity import create_account, login
+    from app.services.recommendation_repository import open_db
+    with open_db() as db:
+        create_account(db, 'inventory-test-owner', 'inventory-test-password', 1)
+        token=login(db, 'inventory-test-owner', 'inventory-test-password', 1)
+    added=client.post('/api/inventory/items',headers={'Authorization':f'Bearer {token}'},json={'household_id':1,'ingredient_id':3,'name':'당근','quantity':1,'unit':'kg'})
     assert added.status_code==201 and added.json['conversion']['quantity_g']==1000
     assert client.get('/api/ingredients/search?q=당근').json['ingredients'][0]['id']==3
 

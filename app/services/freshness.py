@@ -1,10 +1,14 @@
 """Conservative inventory priority, never a food safety determination."""
 from datetime import date, timedelta
+import math
 
 
 def assess_inventory(item, today=None, guideline=None):
     today = today or date.today()
     flags = []
+    quantity = item.get('quantity_g')
+    if quantity is not None and (not math.isfinite(quantity) or quantity < 0):
+        return {'usable':False, 'priority':0, 'flags':['수량 확인 필요'], 'recommended_by':None}
     if item.get('quantity_g') is None or item['quantity_g'] < 0:
         flags.append('수량 확인 필요')
     state = item.get('freshness_state')

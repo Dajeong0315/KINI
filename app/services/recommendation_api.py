@@ -1,7 +1,9 @@
-﻿from datetime import datetime
-import json, sqlite3, tempfile
+﻿from contextlib import closing
+from datetime import datetime
+import json, sqlite3, tempfile, os
+from uuid import uuid4
 from pathlib import Path
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from pydantic import ValidationError
 from .recommendation_repository import open_db, members
 from .recommendation_models import RecommendationRequest, MealSessionRequest, MealRecordRequest, ConversationRequest, MessageRequest, FeedbackRequest, CookingAdjustmentRequest, CookingSessionRequest, CookingChangeRequest, CookingCompleteRequest, CookingQuestionRequest, InventoryNormalizeRequest, InventoryItemRequest
@@ -12,10 +14,50 @@ from .personalization import add_evidence, aggregate, record_recipe, recipe_feat
 from . import cooking
 from .errors import ServiceError
 from .local_stt import transcribe_audio
+from .local_identity import authorize, AuthenticationError, AuthorizationError
+from . import inventory_events
 from .ingredient_normalization import normalize_ingredient
 from .unit_conversion import convert_quantity
 
 api=Blueprint('recommendations',__name__)
+
+
+@api.before_request
+def postgres_supported_routes():
+    # Do not expose private tables through legacy routes whose PostgreSQL
+    # persistence/authorization has not been migrated and verified yet.
+    supported = {'privacy_capabilities', 'demo', 'get_members', 'create_recommendation',
+                 'get_recommendation', 'add_feedback', 'data_releases', 'data_release', 'data_quality_summary',
+                 'create_session', 'cooking_create', 'cooking_get', 'cooking_change', 'cooking_complete',
+                 'inventory_normalize', 'ingredient_search'}
+    if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres' and request.endpoint.rsplit('.', 1)[-1] not in supported:
+        return jsonify({'error': '이 API의 PostgreSQL 이전은 아직 완료되지 않았습니다.',
+                        'status': 'not_implemented'}), 501
+
+
+@api.after_request
+def private_recommendation_no_cache(response):
+    if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres':
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def postgres_identity(db, household_id=None, *, write=False):
+    if not getattr(db, 'is_postgres', False):
+        return None
+    scheme, _, token = request.headers.get('Authorization', '').partition(' ')
+    if scheme.lower() != 'bearer' or not token.strip():
+        raise AuthenticationError('가구 세션이 필요합니다.')
+    return authorize(db, token.strip(), household_id=household_id, write=write)
+
+
+def postgres_cooking_identity(db, session_id, *, write=False):
+    if getattr(db, 'is_postgres', False):
+        postgres_identity(db, write=write)
+        row = db.execute('SELECT household_id FROM cooking_sessions WHERE id=?', (session_id,)).fetchone()
+        if not row:
+            raise ValueError('조리 세션을 찾을 수 없습니다.')
+        postgres_identity(db, row['household_id'], write=write)
 
 def validated(model):
     return model.model_validate(request.get_json(silent=True) or {})
@@ -26,6 +68,8 @@ def errors(fn):
     def wrapped(*args,**kwargs):
         try: return fn(*args,**kwargs)
         except ValidationError: return jsonify({'error':'요청 값의 형식을 확인해 주세요.'}),400
+        except AuthenticationError: return jsonify({'error':'인증이 필요합니다.'}),401
+        except AuthorizationError: return jsonify({'error':'가구 쓰기 권한이 필요합니다.'}),403
         except (ValueError, sqlite3.IntegrityError, ServiceError): return jsonify({'error':'요청을 처리할 수 없습니다. 입력과 제한 조건을 확인해 주세요.'}),400
     return wrapped
 
@@ -64,18 +108,24 @@ def data_quality_summary():
 @errors
 def inventory_normalize():
     obj=validated(InventoryNormalizeRequest)
-    with open_db() as db:
+    with closing(open_db()) as db, db:
+        if getattr(db, 'is_postgres', False): db.execute('SET TRANSACTION READ ONLY')
+        postgres_identity(db)
         ingredient=normalize_ingredient(db,obj.name)
-        conversion=convert_quantity(db,obj.quantity,obj.unit,ingredient['ingredient_id'])
-        return jsonify({'ingredient':ingredient,'conversion':conversion,'requires_confirmation':ingredient['match_status']!='matched' or ingredient['warning'] is not None or conversion['quantity_g'] is None})
+        conversion_id=ingredient['ingredient_id'] if ingredient['match_status'] in ('matched','needs_label_check') else None
+        conversion=convert_quantity(db,obj.quantity,obj.unit,conversion_id)
+        return jsonify({'ingredient':ingredient,'conversion':conversion,'requires_confirmation':ingredient['match_status']!='matched' or ingredient['warning'] is not None or conversion['quantity_g'] is None or conversion['warning'] is not None})
 
 @api.get('/api/ingredients/search')
 @errors
 def ingredient_search():
     query=request.args.get('q','').strip()
     if not query or len(query)>150: raise ValueError('검색어를 입력해 주세요.')
-    with open_db() as db:
-        rows=db.execute('SELECT id,canonical_name,category,source_type,is_composite,requires_label_check FROM ingredients WHERE active=1 AND instr(canonical_name,?)>0 ORDER BY canonical_name,id LIMIT 30',(query,))
+    with closing(open_db()) as db, db:
+        if getattr(db, 'is_postgres', False): db.execute('SET TRANSACTION READ ONLY')
+        postgres_identity(db)
+        contains = 'strpos(COALESCE(canonical_name,name),?)' if getattr(db, 'is_postgres', False) else 'instr(COALESCE(canonical_name,name),?)'
+        rows=db.execute(f'SELECT id,COALESCE(canonical_name,name) AS canonical_name,category,source_type,is_composite,requires_label_check FROM ingredients WHERE active=TRUE AND {contains}>0 ORDER BY COALESCE(canonical_name,name),id LIMIT 30',(query,))
         return jsonify({'ingredients':[dict(row) for row in rows]})
 
 @api.post('/api/inventory/items')
@@ -85,13 +135,30 @@ def inventory_add():
     for value in (obj.expiry_date,obj.opened_at):
         if value: datetime.strptime(value,'%Y-%m-%d')
     with open_db() as db:
-        if not db.execute('SELECT 1 FROM households WHERE id=?',(obj.household_id,)).fetchone(): raise ValueError('가구가 없습니다.')
+        auth = request.headers.get('Authorization', '')
+        if not auth.startswith('Bearer '): raise AuthenticationError('인증이 필요합니다.')
+        identity = authorize(db, auth[7:].strip(), household_id=obj.household_id, write=True)
+        if not db.execute('SELECT 1 FROM households WHERE id=?',(identity['household_id'],)).fetchone(): raise ValueError('가구가 없습니다.')
         ingredient=normalize_ingredient(db,obj.name)
         conversion=convert_quantity(db,obj.quantity,obj.unit,obj.ingredient_id)
         if ingredient['ingredient_id']!=obj.ingredient_id or ingredient['match_status'] not in ('matched','needs_label_check') or conversion['quantity_g'] is None: raise ValueError('재료와 중량을 확인해 주세요.')
         status='needs_confirmation' if obj.product_name or ingredient['match_status']=='needs_label_check' else 'verified'
-        cur=db.execute('INSERT INTO inventory_items(household_id,ingredient_id,original_name,quantity,unit,quantity_g,data_status,product_name,label_confirmed,expiry_date,use_by,opened_at,freshness_state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',(obj.household_id,obj.ingredient_id,obj.name,obj.quantity,obj.unit,conversion['quantity_g'],status,obj.product_name,int(obj.label_confirmed),obj.expiry_date,obj.expiry_date,obj.opened_at,obj.freshness_state))
-        return jsonify({'id':cur.lastrowid,'ingredient':ingredient,'conversion':conversion,'data_status':status,'requires_confirmation':status!='verified'}),201
+        if status == 'verified':
+            event = inventory_events.ingest(db, auth[7:].strip(), {
+                'client_event_id': str(uuid4()), 'source': 'manual', 'action': 'stock_in',
+                'detected_label': obj.name, 'confidence': 1.0,
+            })
+            event = inventory_events.confirm(db, auth[7:].strip(), event['event_id'], {
+                'ingredient_id': obj.ingredient_id, 'quantity_g': conversion['quantity_g'],
+                'expiry_date': obj.expiry_date,
+            })
+            item_id = event['inventory_item_id']
+            db.execute('''UPDATE inventory_items SET original_name=?,quantity=?,unit=?,data_status=?,product_name=?,label_confirmed=?,expiry_date=?,use_by=?,opened_at=?,freshness_state=? WHERE id=?''',
+                       (obj.name,obj.quantity,obj.unit,status,obj.product_name,int(obj.label_confirmed),obj.expiry_date,obj.expiry_date,obj.opened_at,obj.freshness_state,item_id))
+        else:
+            cur=db.execute('INSERT INTO inventory_items(household_id,ingredient_id,original_name,quantity,unit,quantity_g,data_status,product_name,label_confirmed,expiry_date,use_by,opened_at,freshness_state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',(obj.household_id,obj.ingredient_id,obj.name,obj.quantity,obj.unit,conversion['quantity_g'],status,obj.product_name,int(obj.label_confirmed),obj.expiry_date,obj.expiry_date,obj.opened_at,obj.freshness_state))
+            item_id=cur.lastrowid
+        return jsonify({'id':item_id,'ingredient':ingredient,'conversion':conversion,'data_status':status,'requires_confirmation':status!='verified'}),201
 
 @api.post('/api/voice/recommendations')
 @errors
@@ -129,24 +196,55 @@ def voice_recommendation():
 @errors
 def cooking_create():
     obj=validated(CookingSessionRequest)
-    with open_db() as db: return jsonify(cooking.create(db,obj)),201
+    with closing(open_db()) as db, db:
+        if getattr(db, 'is_postgres', False):
+            postgres_identity(db, write=True)
+            for table, resource_id in [('meal_sessions', obj.meal_session_id),
+                                       ('recommendation_requests', obj.recommendation_request_id)]:
+                row = db.execute(f'SELECT household_id FROM {table} WHERE id=?', (resource_id,)).fetchone()
+                if not row:
+                    raise ValueError('추천 또는 식사 세션을 찾을 수 없습니다.')
+                postgres_identity(db, row['household_id'], write=True)
+        return jsonify(cooking.create(db,obj)),201
 
 @api.get('/api/cooking-sessions/<int:session_id>')
 @errors
 def cooking_get(session_id):
-    with open_db() as db: return jsonify(cooking.state(db,session_id))
+    with closing(open_db()) as db, db:
+        postgres_cooking_identity(db, session_id)
+        return jsonify(cooking.state(db,session_id))
 
 @api.post('/api/cooking-sessions/<int:session_id>/ingredients')
 @errors
 def cooking_change(session_id):
     obj=validated(CookingChangeRequest)
-    with open_db() as db: return jsonify(cooking.change(db,session_id,obj))
+    with closing(open_db()) as db, db:
+        postgres_cooking_identity(db, session_id, write=True)
+        return jsonify(cooking.change(db,session_id,obj))
 
 @api.post('/api/cooking-sessions/<int:session_id>/complete')
 @errors
 def cooking_complete(session_id):
-    obj=validated(CookingCompleteRequest)
-    with open_db() as db: return jsonify(cooking.complete(db,session_id,obj)),201
+    obj = validated(CookingCompleteRequest)
+    inventory_token = None
+    if 'data_status' in current_app.blueprints or os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres':
+        scheme, _, token = request.headers.get('Authorization', '').partition(' ')
+        if scheme.lower() != 'bearer' or not token.strip():
+            return jsonify({'error': '로컬 로그인 세션이 필요합니다.'}), 401
+        inventory_token = token.strip()
+
+    try:
+        with closing(open_db()) as db, db:
+            result = cooking.complete(db, session_id, obj, inventory_token=inventory_token)
+    except PermissionError:
+        return jsonify({'error': '세션 또는 가구 권한을 확인하세요.'}), 403
+    except cooking.InventoryConfirmationRequired as error:
+        return jsonify({
+            'error': str(error),
+            'code': 'inventory_confirmation_required',
+            'ingredients': error.ingredients,
+        }), 409
+    return jsonify(result), 201
 
 @api.post('/api/cooking-sessions/<int:session_id>/questions')
 @errors
@@ -173,46 +271,79 @@ def cooking_question(session_id):
 
 @api.get('/api/households/demo')
 def demo():
-    with open_db() as db:
+    with closing(open_db()) as db:
+        private = getattr(db, 'is_postgres', False) or db.execute("SELECT 1 FROM metadata WHERE key='dataset_mode' AND value='private'").fetchone()
+        managed = db.execute('SELECT 1 FROM account_households WHERE household_id=1').fetchone()
+        if private or managed:
+            return jsonify({'error': '데모 가족을 사용할 수 없습니다.'}), 404
         return jsonify({'id':1,'name':'데모 가족','members':members(db,1)})
 
 @api.get('/api/members')
 @errors
 def get_members():
     household_id=int(request.args.get('household_id',1))
-    with open_db() as db: return jsonify({'members':members(db,household_id)})
+    with closing(open_db()) as db:
+        managed = db.execute('SELECT 1 FROM account_households WHERE household_id=?', (household_id,)).fetchone()
+        private = getattr(db, 'is_postgres', False) or db.execute("SELECT 1 FROM metadata WHERE key='dataset_mode' AND value='private'").fetchone()
+        if managed or private:
+            scheme, _, token = request.headers.get('Authorization', '').partition(' ')
+            if scheme.lower() != 'bearer' or not token.strip():
+                return jsonify({'error': '로컬 로그인 세션이 필요합니다.'}), 401
+            from .local_identity import authorize
+            try:
+                authorize(db, token.strip(), household_id=household_id)
+            except PermissionError:
+                return jsonify({'error': '세션 또는 가구 권한을 확인하세요.'}), 403
+        return jsonify({'members':members(db,household_id)})
 
 @api.post('/api/meal-sessions')
 @errors
 def create_session():
     obj=validated(MealSessionRequest); ids=sorted(set(obj.participant_ids))
-    with open_db() as db:
+    with closing(open_db()) as db, db:
+        postgres_identity(db, obj.household_id, write=True)
         if len(members(db,obj.household_id,ids))!=len(ids): raise ValueError('해당 가구의 참여자를 선택하세요.')
         cur=db.execute('INSERT INTO meal_sessions(household_id,meal_type) VALUES (?,?)',(obj.household_id,obj.meal_type))
         db.executemany('INSERT INTO meal_session_participants VALUES (?,?)',[(cur.lastrowid,i) for i in ids])
+        if getattr(db, 'is_postgres', False):
+            db.execute('INSERT INTO meal_data_context SELECT ?,source_code,release_id FROM active_data_releases',
+                       (cur.lastrowid,))
         return jsonify({'session_id':cur.lastrowid,'household_id':obj.household_id,'meal_type':obj.meal_type,'participant_ids':ids}),201
 
 @api.post('/api/recommendations')
 @errors
 def create_recommendation():
+    # Check the session before natural-language parsing can invoke a model.
+    if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres':
+        with closing(open_db()) as db, db:
+            postgres_identity(db, write=True)
     payload=request.get_json(silent=True) or {}
     if 'text' in payload:
         try: obj=parse_recommendation_request(payload['text'])
         except Exception: return jsonify({'error':'자연어 해석에 실패했습니다. 구조화된 요청을 입력해 주세요.'}),400
     else: obj=RecommendationRequest.model_validate(payload)
-    with open_db() as db:
+    with closing(open_db()) as db, db:
+        postgres_identity(db, obj.household_id, write=True)
         result=recommend(db,obj.model_dump(),persist=False)
         result=enrich_with_ai(obj.model_dump(),result)
         result=persist_recommendation(db,obj.model_dump(),result)
     return jsonify(result),201
 
 @api.get('/api/recommendations/<int:request_id>')
+@errors
 def get_recommendation(request_id):
-    with open_db() as db:
-        row=db.execute('SELECT result_json,nutrition_data_release_id,allergen_reference_version_id FROM recommendation_requests WHERE id=?',(request_id,)).fetchone()
+    from .recommendation_provider import catalog_context
+    with closing(open_db()) as db, db:
+        postgres_identity(db)
+        row=db.execute('SELECT result_json,nutrition_data_release_id,allergen_reference_version_id,household_id FROM recommendation_requests WHERE id=?',(request_id,)).fetchone()
+        if row:
+            postgres_identity(db, row['household_id'])
         pointer=db.execute('SELECT nutrition_release_id,allergen_reference_version_id FROM data_release_pointers WHERE id=1').fetchone()
+        current_catalog = catalog_context(db)
     if not row: return jsonify({'error':'추천 요청을 찾을 수 없습니다.'}),404
     result=json.loads(row[0])
+    if result.pop('_catalog_context', None) != current_catalog and result.get('status') == 'recommendations_available':
+        result.update(status='stale_unvalidated', recommendations=[], requires_confirmation=True)
     if result.get('status') == 'recommendations_available' and not result.get('ai_explanation'):
         result.update({'status':'stale_unvalidated','recommendations':[], 'requires_confirmation':True, 'message':'저장된 추천은 현재 정보로 다시 검증해야 합니다. 다시 추천받아 주세요.'})
     if 'data_quality' not in result:
@@ -220,7 +351,7 @@ def get_recommendation(request_id):
         for candidate in result.get('recommendations',[]):
             candidate.update({'data_quality':'confirmation_required','requires_confirmation':True,'warnings':['현재 기준으로 재검증되지 않았습니다.']})
     elif result.get('status') == 'recommendations_available' and (row['nutrition_data_release_id'] != pointer['nutrition_release_id'] or row['allergen_reference_version_id'] != pointer['allergen_reference_version_id']):
-        result.update({'status':'stale_unvalidated','requires_confirmation':True})
+        result.update({'status':'stale_unvalidated','recommendations':[],'requires_confirmation':True})
         result.setdefault('warnings',[]).append('Published reference release changed; rerun the recommendation to revalidate.')
     return jsonify(result)
 
@@ -283,9 +414,11 @@ def add_message(session_id):
 @errors
 def add_feedback(request_id):
     obj=validated(FeedbackRequest)
-    with open_db() as db:
+    with closing(open_db()) as db, db:
+        postgres_identity(db, write=True)
         row=db.execute('SELECT household_id,request_json,result_json FROM recommendation_requests WHERE id=?', (request_id,)).fetchone()
         if not row: return jsonify({'error':'추천 요청을 찾을 수 없습니다.'}),404
+        postgres_identity(db, row['household_id'], write=True)
         stored=json.loads(row['result_json'])
         if stored.get('status') != 'recommendations_available' or not stored.get('ai_explanation'): raise ValueError('확인된 추천이 아닙니다.')
         if not db.execute('SELECT 1 FROM recommendation_candidates WHERE request_id=? AND recipe_id=?', (request_id,obj.candidate_recipe_id)).fetchone(): raise ValueError('해당 요청에서 표시된 후보가 아닙니다.')

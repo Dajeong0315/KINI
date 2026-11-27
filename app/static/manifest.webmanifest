@@ -1,9 +1,9 @@
 {
-  "name": "식탁의 기준",
-  "short_name": "식탁의 기준",
-  "start_url": "/",
+  "name": "KINI · 우리 가족의 영양사",
+  "short_name": "KINI",
+  "start_url": "/mobile",
   "display": "standalone",
-  "background_color": "#111315",
-  "theme_color": "#c9003b",
+  "background_color": "#f7f7ef",
+  "theme_color": "#2b5e46",
   "lang": "ko-KR"
 }

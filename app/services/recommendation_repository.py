@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS inferred_preferences(id INTEGER PRIMARY KEY, househol
 CREATE UNIQUE INDEX IF NOT EXISTS preference_identity ON inferred_preferences(household_id,ifnull(member_id,0),feature_type,feature_value);
 CREATE TABLE IF NOT EXISTS household_behavior_summary(household_id INTEGER PRIMARY KEY REFERENCES households(id), preferred_cook_time_minutes REAL, preferred_meal_types_json TEXT, frequently_used_ingredients_json TEXT, recently_rejected_features_json TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS cooking_sessions(id INTEGER PRIMARY KEY, household_id INTEGER NOT NULL REFERENCES households(id), meal_session_id INTEGER NOT NULL REFERENCES meal_sessions(id), request_id INTEGER NOT NULL REFERENCES recommendation_requests(id), recipe_id INTEGER NOT NULL REFERENCES recipes(id), ingredients_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TEXT, meal_record_id INTEGER REFERENCES meal_records(id));
+CREATE TABLE IF NOT EXISTS cooking_inventory_event_links(event_id INTEGER PRIMARY KEY REFERENCES inventory_events(id), cooking_session_id INTEGER NOT NULL REFERENCES cooking_sessions(id));
 -- Imported reference data is deliberately separate from household and demo data.
 CREATE TABLE IF NOT EXISTS data_sources(id INTEGER PRIMARY KEY, source_key TEXT NOT NULL UNIQUE, provider_name TEXT NOT NULL, dataset_name TEXT NOT NULL, source_url TEXT NOT NULL, license_text TEXT, license_url TEXT, expected_format TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS dataset_releases(id INTEGER PRIMARY KEY, data_source_id INTEGER NOT NULL REFERENCES data_sources(id), external_release_id TEXT, source_published_at TEXT, imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, checksum TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('staging','validated','published','retired','failed')), record_count INTEGER NOT NULL DEFAULT 0, accepted_count INTEGER NOT NULL DEFAULT 0, quarantined_count INTEGER NOT NULL DEFAULT 0, notes TEXT);
@@ -53,15 +54,24 @@ CREATE TABLE IF NOT EXISTS data_release_pointers(id INTEGER PRIMARY KEY CHECK(id
 '''
 
 def connect(path=None):
+    if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres':
+        from .postgres_repository import connect_postgres
+        return connect_postgres()
     path = path or os.getenv('KINI_DB_PATH') or str(DATA / 'kini.sqlite3')
     db=sqlite3.connect(path, timeout=10)
     db.row_factory=sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
     return db
 
-def initialize(db):
+def initialize(db, *, seed_demo=None):
+    # Earlier A-only databases used data_sources(code,...). main's official import
+    # owns data_sources(id,source_key,...); preserve both without overwriting data.
+    source_columns = {row['name'] for row in db.execute('PRAGMA table_info(data_sources)')}
+    if 'code' in source_columns and 'source_key' not in source_columns:
+        db.execute('ALTER TABLE data_sources RENAME TO catalog_data_sources')
     db.executescript(SCHEMA)
     migrations = {
+        'cooking_sessions': {'planned_servings':'INTEGER'},
         'ingredients': {'canonical_name':'TEXT', 'source_type':"TEXT NOT NULL DEFAULT 'unknown'", 'data_confidence':'REAL', 'is_composite':'INTEGER NOT NULL DEFAULT 0', 'requires_label_check':'INTEGER NOT NULL DEFAULT 0', 'active':'INTEGER NOT NULL DEFAULT 1'},
         'ingredient_aliases': {'normalized_alias':'TEXT', 'alias_type':"TEXT NOT NULL DEFAULT 'unknown'", 'confidence':'REAL', 'source_type':"TEXT NOT NULL DEFAULT 'unknown'"},
         'ingredient_nutrition': {'basis_amount_g':'REAL', 'source_type':"TEXT NOT NULL DEFAULT 'unknown'", 'source_reference':'TEXT', 'verified_at':'TEXT', 'confidence':'REAL'},
@@ -87,6 +97,8 @@ def initialize(db):
             db.execute(f'ALTER TABLE ingredient_storage_guidelines ADD COLUMN {name} INTEGER')
     if 'recommended_storage' not in guideline_columns:
         db.execute('ALTER TABLE ingredient_storage_guidelines ADD COLUMN recommended_storage TEXT')
+    from .data_platform import migrate
+    migrate(db)
     request_columns = {row['name'] for row in db.execute('PRAGMA table_info(recommendation_requests)')}
     for name, definition in {'nutrition_data_release_id':'INTEGER', 'allergen_reference_version_id':'INTEGER'}.items():
         if name not in request_columns:
@@ -94,6 +106,13 @@ def initialize(db):
     db.execute('INSERT OR IGNORE INTO data_release_pointers(id) VALUES (1)')
     db.commit()
     if db.execute('SELECT 1 FROM households LIMIT 1').fetchone(): return
+    mode = db.execute("SELECT value FROM metadata WHERE key='dataset_mode'").fetchone()
+    if seed_demo is None:
+        seed_demo = os.getenv('KINI_SEED_DEMO', '1') == '1'
+    if not seed_demo or (mode and mode[0] == 'private'):
+        db.execute("INSERT OR REPLACE INTO metadata VALUES ('dataset_mode','private')")
+        db.commit()
+        return
     seed=json.loads((DATA/'demo_household.json').read_text(encoding='utf-8-sig'))
     with db:
         db.execute('INSERT INTO households VALUES (?,?)',(1,seed['household']['name']))
@@ -121,8 +140,38 @@ def initialize(db):
             db.execute('INSERT INTO rag_chunks(document_id,content) VALUES (?,?)',(cur.lastrowid,content))
         db.execute("INSERT INTO metadata VALUES ('db_version','demo-1')")
 
-def open_db(path=None):
-    db=connect(path); initialize(db); return db
+def open_db(path=None, *, seed_demo=None):
+    db=connect(path)
+    if os.getenv('KINI_DB_BACKEND', 'sqlite').lower() == 'postgres':
+        # Production connections are schema-only at runtime. Migrations and
+        # demo fixtures are explicit operator actions, never request actions.
+        return db
+    try:
+        initialize(db, seed_demo=seed_demo)
+    except Exception:
+        db.close()
+        raise
+    return db
+
+def recipe_candidates(db):
+    """Public candidate rows only; caller still applies local safety rules."""
+    return [dict(row) for row in db.execute('SELECT * FROM recipes ORDER BY id')]
+
+
+def recipe_ingredient_rows(db, recipe_id):
+    return [dict(row) for row in db.execute('''SELECT ri.quantity_g,i.id,i.name,i.category,
+        n.energy_kcal,n.protein_g,n.carbohydrate_g,n.fat_g,n.sodium_mg
+        FROM recipe_ingredients ri JOIN ingredients i ON i.id=ri.ingredient_id
+        LEFT JOIN ingredient_nutrition n ON n.ingredient_id=i.id
+        WHERE recipe_id=? ORDER BY i.id''', (recipe_id,))]
+
+
+def ingredient_nutrition_row(db, ingredient_id):
+    return db.execute('''SELECT i.*,n.basis_amount_g,n.source_type AS nutrition_source,
+        n.confidence AS nutrition_confidence,n.energy_kcal,n.protein_g,n.carbohydrate_g,n.fat_g,n.sodium_mg
+        FROM ingredients i LEFT JOIN ingredient_nutrition n ON n.ingredient_id=i.id WHERE i.id=?''',
+        (ingredient_id,)).fetchone()
+
 
 def members(db, household_id, ids=None):
     rows=db.execute('SELECT * FROM members WHERE household_id=? ORDER BY id',(household_id,)).fetchall()

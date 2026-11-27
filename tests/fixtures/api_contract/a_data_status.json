@@ -1,0 +1,15 @@
+{
+  "dataset_mode": "private",
+  "releases": [],
+  "catalog_projection": "not_connected_to_recommendation_engine",
+  "supabase": {
+    "purpose": "public_food_catalog_and_daily_metrics",
+    "automatic_export_enabled": false,
+    "catalog_sync_enabled": false
+  },
+  "authentication": {
+    "repository_available": true,
+    "http_enforced": false,
+    "inventory_events_http_enforced": true
+  }
+}

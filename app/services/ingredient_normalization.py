@@ -1,6 +1,7 @@
 """Conservative local name matching; never infers product composition."""
 import re
 import unicodedata
+import math
 
 def normalize_text(value):
     value=unicodedata.normalize('NFKC',value).strip()
@@ -14,7 +15,7 @@ def normalize_ingredient(db, text):
     normalized=normalize_text(text)
     result={'original_text':text,'normalized_text':normalized,'ingredient_id':None,'canonical_name':None,'match_status':'unknown','confidence':0.0,'warning':'등록된 재료를 직접 확인해 주세요.'}
     if not normalized: return result
-    rows=db.execute("SELECT DISTINCT i.* FROM ingredients i LEFT JOIN ingredient_aliases a ON a.ingredient_id=i.id WHERE i.active=1 AND (i.name=? OR i.canonical_name=? OR a.alias=? OR a.normalized_alias=?) ORDER BY i.id",(normalized,normalized,normalized,normalized)).fetchall()
+    rows=db.execute("SELECT DISTINCT i.* FROM ingredients i LEFT JOIN ingredient_aliases a ON a.ingredient_id=i.id WHERE i.active=TRUE AND (i.name=? OR i.canonical_name=? OR a.alias=? OR a.normalized_alias=?) ORDER BY i.id",(normalized,normalized,normalized,normalized)).fetchall()
     if len(rows)>1:
         result.update(match_status='ambiguous',warning='여러 재료가 일치합니다. 직접 선택해 주세요.')
         return result
@@ -26,7 +27,7 @@ def normalize_ingredient(db, text):
     result.update(ingredient_id=row['id'],canonical_name=row['canonical_name'] or row['name'],confidence=row['data_confidence'] or 0.0)
     if normalized not in (row['name'],row['canonical_name']):
         aliases=db.execute('SELECT * FROM ingredient_aliases WHERE ingredient_id=? AND (alias=? OR normalized_alias=?)',(row['id'],normalized,normalized)).fetchall()
-        if not any(a['source_type']!='unknown' and a['confidence'] is not None and a['confidence']>=.9 for a in aliases):
+        if not any(a['source_type']!='unknown' and a['confidence'] is not None and math.isfinite(a['confidence']) and .9<=a['confidence']<=1 for a in aliases):
             result.update(match_status='ambiguous',warning='별칭의 출처 또는 신뢰도를 확인해 주세요.')
             return result
     if row['is_composite'] or row['requires_label_check']:
