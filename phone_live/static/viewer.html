@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PC 화면 — 실시간 인식</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body { display: grid; grid-template-columns: 1fr 320px; height: 100vh; overflow: hidden; }
+    #view { position: relative; background: #000; }
+    #canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #badge { position: absolute; top: 12px; left: 12px; display: none; background: #facc15; color: #1f2937;
+      font-weight: 700; padding: 8px 12px; border-radius: 10px; font-size: 15px; }
+    #badge.show { display: block; }
+    #empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; color: var(--muted);
+      gap: 8px; padding: 16px; }
+    aside { border-left: 1px solid var(--line); padding: 18px; overflow-y: auto; display: grid; gap: 18px; align-content: start;
+      background: #0f141b; }
+    h2 { font-size: 13px; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .stat { background: rgba(255,255,255,0.04); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+    .stat b { display: block; font-size: 20px; }
+    .stat span { font-size: 12px; color: var(--muted); }
+    #qr { background: #fff; padding: 10px; border-radius: 10px; width: fit-content; }
+    #urls a { color: var(--accent); word-break: break-all; font-size: 13px; display: block; margin-top: 4px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .legend { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+    @media (max-width: 760px) {
+      body { grid-template-columns: 1fr; grid-template-rows: 60vh auto; overflow: auto; height: auto; }
+      #view { height: 60vh; }
+      aside { border-left: 0; border-top: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+  <div id="view">
+    <canvas id="canvas"></canvas>
+    <div id="badge"></div>
+    <div id="empty">
+      <div style="font-size:40px">📱</div>
+      <div>핸드폰에서 카메라 페이지를 열면 여기에 화면이 나옵니다.</div>
+      <div>오른쪽 QR 코드를 핸드폰으로 찍어 접속하세요.</div>
+    </div>
+  </div>
+
+  <aside>
+    <section>
+      <div class="row">
+        <span class="pill" id="pConn"><span class="led"></span><span>핸드폰 기다리는 중</span></span>
+        <span class="pill" id="pFacing">카메라 –</span>
+      </div>
+    </section>
+
+    <section class="stats">
+      <div class="stat"><b id="sMs">–</b><span>인식 시간 (ms)</span></div>
+      <div class="stat"><b id="sDet">–</b><span>인식 횟수 / 초</span></div>
+      <div class="stat"><b id="sFps">–</b><span>받은 화면 / 초</span></div>
+      <div class="stat"><b id="sN">–</b><span>인식된 물체</span></div>
+    </section>
+
+    <section>
+      <h2>인식된 물체</h2>
+      <ul class="items" id="list"><li class="muted">인식된 물체 없음</li></ul>
+    </section>
+
+    <section>
+      <h2>설정</h2>
+      <label class="range">신뢰도 <input id="conf" type="range" min="0.1" max="0.9" step="0.05" value="0.2"><span id="confV">20%</span></label>
+      <div class="row" style="margin-top:10px">
+        <button id="full">전체 화면</button>
+        <button id="shot">화면 저장</button>
+        <a href="/compare-view" style="color:var(--accent);font-size:13px;align-self:center">전/후 비교 화면 →</a>
+      </div>
+    </section>
+
+    <section class="legend">
+      <h2>상자 색</h2>
+      <div><i style="background:#38bdf8"></i>포장 글씨로 읽은 이름</div>
+      <div><i style="background:#22c55e"></i>생김새로 인식한 품목 (신뢰도 75% 이상)</div>
+      <div><i style="background:#facc15"></i>사용자가 이름 붙인 품목</div>
+      <div><i style="background:#ef4444"></i>Unknown — 핸드폰에서 상자를 누르면 이름 입력</div>
+      <div style="margin-top:6px">실시간 화면은 빠른 설정(포장 이름은 OCR 생략). 핸드폰에서 <b>일시정지 → 🔍 식재료 파악하기</b>를 누르면 그 화면을 정밀하게 다시 인식합니다.</div>
+    </section>
+
+    <section>
+      <h2>핸드폰으로 접속</h2>
+      <div id="qr"></div>
+      <div id="urls" class="muted" style="margin-top:8px;font-size:13px"></div>
+      <p class="muted" style="font-size:12px;line-height:1.5;margin:8px 0 0">같은 와이파이에서 접속 → '안전하지 않음' 경고에서 [고급] → [계속]</p>
+    </section>
+  </aside>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="/static/common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const canvas = $("canvas"), ctx = canvas.getContext("2d");
+let frame = null, result = null, facing = "", minConf = 0.2, frames = 0, lastFrameAt = 0;
+
+$("conf").oninput = e => { minConf = +e.target.value; $("confV").textContent = Math.round(minConf * 100) + "%";
+  renderList($("list"), result, minConf); };
+$("full").onclick = () => document.fullscreenElement ? document.exitFullscreen() : $("view").requestFullscreen();
+$("shot").onclick = () => {
+  const a = document.createElement("a");
+  a.href = canvas.toDataURL("image/png");
+  a.download = `phone-live-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+  a.click();
+};
+
+function connect() {
+  const ws = new WebSocket(wsUrl("/ws/viewer"));
+  ws.binaryType = "blob";
+  ws.onmessage = async ev => {
+    if (ev.data instanceof Blob) {                       // 핸드폰 화면 (JPEG)
+      const bmp = await createImageBitmap(ev.data);
+      if (frame) frame.close?.();
+      frame = bmp; frames++; lastFrameAt = performance.now();
+      $("empty").style.display = "none";
+      return;
+    }
+    const m = JSON.parse(ev.data);
+    if (m.type === "dets") {
+      result = m;
+      const full = m.mode === "full";            // 핸드폰에서 '식재료 파악하기' 누른 결과
+      if (full) {
+        const rows = summarize(m, minConf), n = rows.reduce((a, x) => a + x.n, 0);
+        const u = unknownCount(m, minConf);
+        $("badge").textContent = `🔍 식재료 파악 결과 · ${rows.length}종 ${n}개 · ${(m.ms / 1000).toFixed(1)}초`
+          + (u ? ` · 모르는 물체 ${u}개 (핸드폰에서 이름 입력)` : "");
+      }
+      $("badge").classList.toggle("show", full);
+      $("sMs").textContent = m.ms;
+      $("sDet").textContent = m.det_fps;
+      $("sN").textContent = m.dets.filter(d => d.conf >= minConf).length;
+      renderList($("list"), result, minConf);
+    } else if (m.type === "mode" && m.mode === "compare") {   // 핸드폰이 전/후 비교 화면을 열면 PC 도 비교 화면으로
+      location.href = "/compare-view";
+    } else if (m.type === "camera") {
+      facing = m.connected === false || m.facing === "끊김" ? "연결 안 됨" : (m.facing || "-");
+      $("pFacing").textContent = `카메라 ${facing}`;
+    }
+  };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+connect();
+
+setInterval(() => {                                     // 받은 화면 수 / 연결 상태
+  $("sFps").textContent = frames; frames = 0;
+  const live = performance.now() - lastFrameAt < 2000;
+  $("pConn").classList.toggle("on", live);
+  $("pConn").lastElementChild.textContent = live ? "핸드폰 화면 받는 중" : "핸드폰 기다리는 중";
+}, 1000);
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
+  if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+  if (frame) {
+    const rect = fitRect(frame.width, frame.height, W, H, "contain");
+    ctx.drawImage(frame, rect.x, rect.y, rect.w, rect.h);
+    drawDetections(ctx, result, rect, { minConf, hint: false });       // PC 화면은 거울 없이 원본 방향
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+fetch("/api/info").then(r => r.json()).then(info => {
+  const url = info.camera_urls[0];
+  $("urls").innerHTML = info.camera_urls.map(u => `<a href="${u}">${u}</a>`).join("")
+    + `<div style="margin-top:6px">모델 ${info.model} · 품목 ${info.items}종</div>`;
+  if (url && window.QRCode) new QRCode($("qr"), { text: url, width: 168, height: 168 });
+  else $("qr").style.display = "none";
+}).catch(() => {});
+</script>
+</body>
+</html>
