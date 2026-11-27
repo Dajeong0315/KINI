@@ -1,0 +1,28 @@
+[Unit]
+Description=KINI isolated B text runtime
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+User=kini-b
+Group=kini-b
+WorkingDirectory=/opt/kini-b/current
+EnvironmentFile=/etc/kini-b/runtime.env
+ExecStart=/opt/kini-b/venv/bin/gunicorn --config deploy/b/gunicorn.conf.py app.b_runtime:create_app()
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kini-b
+MemoryMax=1G
+TasksMax=64
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

@@ -84,6 +84,31 @@ def request_recommend(page):
     page.locator('body[aria-busy=false]').wait_for()
 
 
+def test_reports_failure_retry_and_expired_session_do_not_show_old_totals(live,browser_page):
+    base,_=live;page=browser_page
+    page.goto(base+'/mobile');sign_in(page)
+    page.locator('[data-view-link=report]:visible').first.click()
+    page.get_by_role('heading',name='저장된 식사 이력',exact=True).wait_for()
+    assert page.locator('[data-view=report] [data-status=empty]').first.is_visible()
+    page.route('**/api/reports/nutrition?**',lambda route:route.fulfill(status=503,json={'error':'합성 조회 실패'}))
+    page.get_by_role('button',name='기록 다시 조회',exact=True).click()
+    page.locator('[data-view=report] [data-status=error]').wait_for()
+    assert page.locator('[data-view=report] .nutrient-grid').count()==0
+    assert page.locator('[data-view=report] [data-status=empty]').count()==0
+    page.unroute('**/api/reports/nutrition?**')
+    page.get_by_role('button',name='조회 재시도',exact=True).click()
+    page.get_by_role('heading',name='저장된 식사 이력',exact=True).wait_for()
+    page.route('**/api/meal-records?**',lambda route:route.fulfill(status=401,json={'error':'합성 만료'}))
+    page.get_by_role('button',name='기록 다시 조회',exact=True).click()
+    page.get_by_role('heading',name='로컬 가구 로그인',exact=True).wait_for()
+    assert page.locator('[data-view=report] .nutrient-grid').count()==0
+    assert not page.evaluate('localStorage.length || sessionStorage.length')
+    page.unroute('**/api/meal-records?**')
+    sign_in(page)
+    page.get_by_role('heading',name='저장된 식사 이력',exact=True).wait_for()
+    assert page.locator('[data-view=report] [data-status=empty]').first.is_visible()
+
+
 def test_new_family_api_registration_then_existing_mobile_login(live, browser_page):
     base, _ = live
     page = browser_page
@@ -183,7 +208,7 @@ def test_real_api_cooking_and_saved_nutrition(live, browser_page, width):
     assert saved.value.status == 201
     assert refreshed.value.json() == after_withdrawal
     saved_nutrition=saved.value.json()['nutrition_per_serving']
-    page.get_by_role('heading', name='식사 기록 저장 확인', exact=True).wait_for()
+    page.get_by_role('heading', name='저장된 식사 이력', exact=True).wait_for()
     assert '기록 ID' in page.locator('[data-view=report]').inner_text()
     from app.services.recommendation_repository import open_db
     with open_db() as db:
@@ -197,14 +222,18 @@ def test_real_api_cooking_and_saved_nutrition(live, browser_page, width):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     Path('output/ui').mkdir(parents=True,exist_ok=True)
     page.screenshot(path=f'output/ui/live-record-{width}.png',full_page=True)
+    page.get_by_role('button',name='기록 상세',exact=True).click()
+    assert '0.5인분' in page.get_by_role('dialog').inner_text()
+    page.keyboard.press('Escape')
     page.get_by_role('button', name='식후 평가', exact=True).click()
     feedback = page.get_by_role('dialog')
     assert feedback.get_by_role('button', name='평가 저장', exact=True).is_disabled()
     assert feedback.get_by_text('연동 예정', exact=True).is_visible()
     page.reload()
     sign_in(page)
-    page.get_by_role('heading',name='식사 기록 저장 확인',exact=True).wait_for()
-    assert '과거 기록이 없다는 의미는 아닙니다' in page.locator('[data-view=report]').inner_text()
+    page.get_by_role('heading',name='저장된 식사 이력',exact=True).wait_for()
+    assert '기록 ID' in page.locator('[data-view=report]').inner_text()
+    assert '0.5인분' in page.locator('[data-view=report]').inner_text()
 
 
 def test_terminal_states_never_show_previous_candidates(live, browser_page):
@@ -384,7 +413,7 @@ def test_tablet_screens_fit_and_pending_actions_are_explicit(live, browser_page,
             page.get_by_label('식재료 검색').fill('일치하지 않는 재료명')
             assert page.locator('.inventory-list [data-status="empty"]').is_visible()
         elif screen == 'report':
-            assert page.locator('[data-view=report] [data-status="insufficient"]').is_visible()
+            assert page.locator('[data-view=report] [data-status="empty"]').first.is_visible()
         elif screen == 'recommend':
             assert page.get_by_role('heading', name='냉장고 속 재료로 만들 수 있는 메뉴').is_visible()
             assert page.locator('.recipe-option').count() == 0
@@ -443,6 +472,16 @@ def test_login_failure_and_completion_http_errors(live, browser_page):
     save_with_error(403)
     page.get_by_role('button', name='다시 로그인', exact=True).click()
     sign_in(page)
+    # A different account must not inherit the viewer's unfinished form.
+    assert page.get_by_label('실제 섭취량 (인분)').count() == 0
+    open_recommend(page, base)
+    request_recommend(page)
+    page.locator('.recipe-option').first.get_by_role('button').click()
+    page.get_by_label('실제 재료·분량 및 데이터 품질을 확인했습니다').check()
+    page.get_by_role('button', name='조리 시작', exact=True).click()
+    page.get_by_role('button', name='조리 완료 · 섭취량 확인', exact=True).click()
+    page.get_by_label('기존 확정 출고 ID (쉼표 구분)').fill('99999')
+    page.get_by_label('실제 섭취량 (인분)').fill('1')
     save_with_error(409)
     assert '출고 확인 필요' in page.get_by_role('alert').inner_text()
 

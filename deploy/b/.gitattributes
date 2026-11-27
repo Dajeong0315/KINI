@@ -1,0 +1,2 @@
+# Linux deployment artifacts must survive archives made on Windows.
+* text eol=lf

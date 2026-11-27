@@ -37,6 +37,7 @@ def inspect_ingredient(db, ingredient_id, people, inventory, nutrition_provider=
             item['basis_amount_g'] = record.values.get('basis_amount_g', item['basis_amount_g'])
             item['nutrition_source'] = record.source
             item['nutrition_release_id'] = record.release_id
+            item['nutrition_food_id'] = record.external_id
             item['catalog_cache_status'] = record.cache_status
     basis=item['basis_amount_g']
     if not basis or not math.isfinite(basis) or basis<=0 or any(item[n] is None or not math.isfinite(item[n]) or item[n]<0 for n in NUTRIENTS): codes.append('nutrition_unknown')

@@ -5,12 +5,12 @@ from app.services.errors import ServiceError
 
 
 @pytest.mark.parametrize('value', [None, '', '   '])
-def test_empty_model_configuration_uses_qwen35(monkeypatch, value):
+def test_empty_model_configuration_uses_qwen25_3b(monkeypatch, value):
     if value is None:
         monkeypatch.delenv('OLLAMA_MODEL', raising=False)
     else:
         monkeypatch.setenv('OLLAMA_MODEL', value)
-    assert ollama.configured_model() == 'qwen3.5:4b-q4_K_M'
+    assert ollama.configured_model() == 'qwen2.5:3b-instruct-q4_K_M'
 
 
 @pytest.mark.parametrize('model,legacy_prefix', [

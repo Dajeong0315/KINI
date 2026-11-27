@@ -39,6 +39,16 @@ def check():
             raise RuntimeError('migration_version_mismatch')
         # Verify a representative authenticated data read with this runtime role.
         db.execute('SELECT id FROM households LIMIT 0')
+        if os.getenv('KINI_PUBLIC_CATALOG_BACKEND', 'app') == 'supabase':
+            # Check actual public read grants with the restricted app role.
+            # No DDL/DML and no implicit fallback to the private empty catalog.
+            from app.services.supabase_catalog import SupabasePublicCatalog
+            catalog = SupabasePublicCatalog()
+            if not catalog._pointer(db, 'mfds_nutrition'):
+                raise RuntimeError('approved_public_nutrition_release_required')
+            catalog.mapping_revision(db)
+            for table in ('catalog_foods', 'catalog_recipes', 'catalog_recipe_steps', 'catalog_recipe_nutrients'):
+                db.execute(f'SELECT * FROM public.{table} LIMIT 0')
         return {'status': 'ok', 'database': 'reachable', 'migrations': len(expected)}
     finally:
         db.rollback()

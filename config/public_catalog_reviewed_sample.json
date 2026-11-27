@@ -1,0 +1,23 @@
+{
+  "reviewed_on_kst": "2026-11-27",
+  "review_scope": "One raw carrot input; does not approve other ingredients or a complete recipe",
+  "recipe_reference": {
+    "source": "mfds_recipe",
+    "release_id": "30b90991-5512-48ad-93cd-64c7858eb23b",
+    "external_id": "3010",
+    "ingredient": "당근",
+    "quantity_g": 10,
+    "servings": null,
+    "evidence": "Recipe steps mince and mix carrot, while other ingredients have explicit cooking steps. No carrot cooking step is specified."
+  },
+  "food_reference": {
+    "source": "mfds_nutrition",
+    "release_id": "1d211108-0849-479d-9205-ac5060529431",
+    "external_id": "R106-041007601-0000",
+    "expected_name": "당근, 뿌리, 생것",
+    "basis_amount": 100,
+    "basis_unit": "g"
+  },
+  "private_ingredient_id": null,
+  "activation": "Not activated. Bind only to an explicitly confirmed raw-carrot ingredient; never infer a local ID or servings."
+}

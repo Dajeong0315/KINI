@@ -12,7 +12,7 @@ def test_recommendation_and_chat_use_same_model(monkeypatch, value):
     monkeypatch.setenv('OLLAMA_BASE_URL', 'http://localhost:11434')
     settings = _local_settings()
     assert settings['model'] == configured_model()
-    assert settings['model'] == ('qwen3:4b' if value and value.strip() else 'qwen3.5:4b-q4_K_M')
+    assert settings['model'] == ('qwen3:4b' if value and value.strip() else 'qwen2.5:3b-instruct-q4_K_M')
     assert settings['client_kwargs']['timeout'] == 90.0
 
 

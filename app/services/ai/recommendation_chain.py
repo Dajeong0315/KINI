@@ -8,11 +8,31 @@ from .privacy_gateway import PrivacyGateway
 API_ERROR_MESSAGE = "AI 연결 오류로 추천을 만들지 못했습니다. 잠시 후 다시 시도해 주세요."
 
 
+def is_current_rules_only_result(result):
+    from ..recommendation_engine import RULES_VERSION
+    return (result.get('ai_mode') == 'rules-only' and result.get('ai_status') == 'disabled'
+            and result.get('rules_version') == RULES_VERSION
+            and 'nutrition:locally_validated' in result.get('validated_constraint_codes', []))
+
+
 def enrich_with_ai(request: dict[str, Any], rule_result: dict[str, Any], *, gateway: PrivacyGateway | None = None, client: OpenAIRecommendationClient | None = None) -> dict[str, Any]:
+    from flask import has_app_context, current_app
+    if has_app_context():
+        if current_app.config.get('B_RULES_ONLY') is True:
+            # Explicit deployment choice; never an AI exception fallback.
+            # Candidate generation and safety validation have already run locally.
+            result = dict(rule_result)
+            result.update(ai_mode='rules-only', ai_status='disabled',
+                          explanation='공개 영양 자료와 안전 규칙으로 계산한 추천입니다. AI 설명은 사용하지 않았습니다.')
+            return result
+        gateway = gateway or current_app.config.get('B_PRIVACY_GATEWAY')
+        client = client or current_app.config.get('B_AI_CLIENT')
     if rule_result.get("status") != "recommendations_available":
         return rule_result
     decision = (gateway or PrivacyGateway()).prepare(request, rule_result)
     if decision.status != "allowed":
+        if decision.status == "api_error":
+            return _terminal("api_error", API_ERROR_MESSAGE, rule_result, decision.reason)
         return _terminal("privacy_blocked", "개인정보 보호를 위해 AI 추천을 처리할 수 없습니다.", rule_result, decision.reason)
     try:
         response = (client or configured_recommendation_client()).explain(decision.payload or {})

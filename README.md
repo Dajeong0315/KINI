@@ -24,7 +24,7 @@ if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 # 새 Ollama 서버가 로컬 모델만 사용하도록 설정. 기존 서버에는 재시작 필요.
 $env:OLLAMA_NO_CLOUD = "1"
 $env:OLLAMA_HOST = "127.0.0.1:11434"
-ollama pull qwen3.5:4b-q4_K_M
+ollama pull qwen2.5:3b-instruct-q4_K_M
 ollama list
 Invoke-RestMethod http://localhost:11434/api/tags
 .\.venv\Scripts\python.exe .\scripts\download_voice_models.py

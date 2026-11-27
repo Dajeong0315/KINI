@@ -64,6 +64,8 @@ def recommend(db, req, *, persist=True):
             urgency+=priority*min(needed/available,1) if available else 0
             usage.append({'ingredient':name,'needed_g':round(needed,2),'available_g':available,'priority':priority,
                           'nutrition_source': quality.get('nutrition_source') if quality else None,
+                          'nutrition_release_id': quality.get('nutrition_release_id') if quality else None,
+                          'nutrition_food_id': quality.get('nutrition_food_id') if quality else None,
                           'uncertainty_flags':sorted({flag for _,assessment in assessed for flag in assessment['flags']})})
             if name in req.get('excluded_ingredients',[]): reasons.append(f'{name}: 사용자 제외'); reason_codes.append('user_exclusion')
             for p in people:

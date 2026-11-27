@@ -11,25 +11,30 @@ from .recommendation_provider import RecommendationNutritionProvider, per_servin
 from .data_quality import inspect_ingredient
 
 
-def state(db, session_id):
+def _session(db, session_id):
     row = db.execute('SELECT * FROM cooking_sessions WHERE id=?', (session_id,)).fetchone()
     if not row: raise ValueError('조리 세션을 찾을 수 없습니다.')
     result = dict(row)
     result['ingredients'] = json.loads(result.pop('ingredients_json'))
-    result['nutrition_per_serving'] = validate(db, result)
+    return result
+
+
+def state(db, session_id, *, checked=None):
+    result = _session(db, session_id)
+    inspection = []
+    result['nutrition_per_serving'] = validate(db, result, inspection=inspection) if checked is None else checked[0]
+    if checked is not None:
+        inspection = checked[1]
     result['nutrition_confidence'] = '데모 추정치'
-    people=members(db,result['household_id'],[r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=?',(result['meal_session_id'],))])
     warnings=[]; demo=False
-    for entry in result['ingredients']:
-        inventory=[dict(r) for r in db.execute('SELECT * FROM inventory_items WHERE household_id=? AND ingredient_id=?',(result['household_id'],entry['ingredient_id']))]
-        _, flags, quality=inspect_ingredient(db,entry['ingredient_id'],people,inventory,RecommendationNutritionProvider())
+    for flags, quality in inspection:
         warnings.extend(flags)
         demo=demo or bool(quality and (quality['source_type']=='demo' or quality['nutrition_source']=='demo'))
     result.update({'warnings':sorted(set(warnings)),'requires_confirmation':bool(warnings),'data_quality':'demo_data' if demo else 'confirmation_required' if warnings else 'verified'})
     return result
 
 
-def validate(db, session):
+def validate(db, session, *, inspection=None):
     recipe = db.execute('SELECT servings FROM recipes WHERE id=?', (session['recipe_id'],)).fetchone()
     ids = [r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=? ORDER BY member_id', (session['meal_session_id'],))]
     portions = session.get('planned_servings') or recipe['servings']
@@ -47,8 +52,10 @@ def validate(db, session):
                 if constraint['kind'] not in ('excluded_ingredient','meal_sodium_max_mg'): raise ValueError('지원하지 않는 건강 제한이 있습니다.')
                 if constraint['kind']=='excluded_ingredient' and constraint['value'] in (item['name'],item['category']): raise ValueError('참여자의 식이 제한에 해당합니다.')
         inventory = [dict(r) for r in db.execute('SELECT * FROM inventory_items WHERE household_id=? AND ingredient_id=?',(session['household_id'],item['id']))]
-        codes,_,quality=inspect_ingredient(db,item['id'],people,inventory,RecommendationNutritionProvider())
+        codes,flags,quality=inspect_ingredient(db,item['id'],people,inventory,RecommendationNutritionProvider())
         if codes: raise ValueError('재료의 알레르기, 라벨 또는 영양 정보 확인이 필요합니다.')
+        if inspection is not None:
+            inspection.append((flags, quality))
         guideline_order = 'id' if getattr(db, 'is_postgres', False) else 'rowid'
         guideline_row=db.execute(f'SELECT * FROM ingredient_storage_guidelines WHERE ingredient_id=? ORDER BY {guideline_order} DESC LIMIT 1',(item['id'],)).fetchone()
         guideline=dict(guideline_row) if guideline_row else None
@@ -73,7 +80,9 @@ def create(db, obj):
     if pointer and (stored.get('nutrition_data_release_id') != pointer['nutrition_release_id'] or
                     stored.get('allergen_reference_version_id') != pointer['allergen_reference_version_id']):
         raise ValueError('공식 데이터가 변경됐습니다. 다시 추천받아 주세요.')
-    if stored.get('status') != 'recommendations_available' or not stored.get('ai_explanation'): raise ValueError('확인된 추천이 아닙니다.')
+    from .ai.recommendation_chain import is_current_rules_only_result
+    if stored.get('status') != 'recommendations_available' or not (stored.get('ai_explanation') or is_current_rules_only_result(stored)):
+        raise ValueError('확인된 추천이 아닙니다.')
     ids = {r[0] for r in db.execute('SELECT member_id FROM meal_session_participants WHERE session_id=?',(obj.meal_session_id,))}
     if ids != set(json.loads(request['request_json'])['participant_ids']): raise ValueError('추천과 식사 참여자가 일치해야 합니다.')
     if not db.execute('SELECT 1 FROM recommendation_candidates WHERE request_id=? AND recipe_id=?',(obj.recommendation_request_id,obj.recipe_id)).fetchone(): raise ValueError('표시된 추천 후보가 아닙니다.')
@@ -86,15 +95,18 @@ def create(db, obj):
         if entry['quantity_g'] is None or not math.isfinite(entry['quantity_g']) or entry['quantity_g'] <= 0:
             raise ValueError('재료 중량 확인이 필요합니다.')
         entry['quantity_g'] *= len(ids) / base
-    validate(db,draft)
+    # Reuse this transaction's validation for the response; do not repeat all
+    # remote catalog reads after inserting an otherwise unchanged draft.
+    inspection = []
+    nutrients = validate(db,draft,inspection=inspection)
     cur=db.execute('INSERT INTO cooking_sessions(household_id,meal_session_id,request_id,recipe_id,ingredients_json,planned_servings) VALUES (?,?,?,?,?,?)',(meal['household_id'],obj.meal_session_id,obj.recommendation_request_id,obj.recipe_id,json.dumps(ingredients),len(ids)))
-    return state(db,cur.lastrowid)
+    return state(db,cur.lastrowid,checked=(nutrients,inspection))
 
 
 def change(db, session_id, obj):
     if getattr(db, 'is_postgres', False):
         db.execute('SELECT id FROM cooking_sessions WHERE id=? FOR UPDATE', (session_id,)).fetchone()
-    session=state(db,session_id)
+    session=_session(db,session_id)
     if session['status']!='active': raise ValueError('완료된 조리 세션은 수정할 수 없습니다.')
     ingredient=db.execute('SELECT id FROM ingredients WHERE name=?',(obj.ingredient,)).fetchone()
     if not ingredient: raise ValueError('등록된 재료가 아닙니다. 제품과 무게를 확인해 주세요.')
@@ -103,12 +115,15 @@ def change(db, session_id, obj):
     session['ingredients']=[x for x in session['ingredients'] if x['ingredient_id']!=ingredient['id']]
     if obj.quantity_g: session['ingredients'].append({'ingredient_id':ingredient['id'],'quantity_g':obj.quantity_g})
     session['ingredients'].sort(key=lambda x:x['ingredient_id'])
-    validate(db,session)
+    # Validate the final edited draft once, including every remaining ingredient
+    # and participant constraint, while holding the existing transaction lock.
+    inspection = []
+    nutrients = validate(db,session,inspection=inspection)
     db.execute('UPDATE cooking_sessions SET ingredients_json=? WHERE id=?',(json.dumps(session['ingredients']),session_id))
     if (old is None and obj.quantity_g) or (old and obj.quantity_g==0):
         add_evidence(db,session['household_id'],None,'cooking_adjustment','ingredient',obj.ingredient,'prefer' if obj.quantity_g else 'avoid',strength=.4)
         aggregate(db,session['household_id']); update_summary(db,session['household_id'])
-    return state(db,session_id)
+    return state(db,session_id,checked=(nutrients,inspection))
 
 
 class InventoryConfirmationRequired(ValueError):

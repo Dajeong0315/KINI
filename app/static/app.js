@@ -15,6 +15,7 @@
     inventoryMessage = "",
     familyMessage = "",
     reportMember = "all",
+    reportPeriod = "week",
     recommendationOptionsOpen = false,
     profileOptionsOpen = false,
     dialogTrigger = null,
@@ -192,6 +193,7 @@
     $("#main-content").focus({ preventScroll: true });
     window.scrollTo({ top: 0 });
     if (name === "inventory" && s.session) run(() => api.inventory());
+    if (name === "report" && s.session) run(() => reloadReports());
   }
   function loginView(root) {
     heading(
@@ -238,6 +240,7 @@
           password.input.value = "";
         }
         await Promise.all([api.inventory(), api.refreshData()]);
+        if (current === "report") await reloadReports();
       });
     };
     p.append(form);
@@ -736,7 +739,7 @@
             .map((id) => (/^\d+$/.test(id) ? Number(id) : NaN)),
         );
         go("report");
-        await api.inventory();
+        await Promise.all([api.inventory(), reloadReports()]);
       });
     };
     intake.append(form);
@@ -960,30 +963,70 @@
       note("평가자는 저장 시 별도로 확인합니다."),
       connectionState("pending", "평가 저장과 다음 추천 반영은 서버 연동 후 제공돼요."), group, actions);
   }
+  function reportParams(offset = 0) {
+    return { period: reportPeriod, member_id: reportMember === "all" ? null : reportMember, offset };
+  }
+  async function reloadReports(offset = 0) {
+    const pending = api.loadReports(reportParams(offset));
+    render();
+    return pending;
+  }
+  async function openMealDetail(recordId) {
+    const detail = await api.mealDetail(recordId);
+    const content = node("div");
+    content.append(note(`${detail.meal_date || "날짜 미확인"} · ${detail.meal_type || "식사"} · 기록 ID ${detail.record_id}`),
+      note("저장된 개인별 실제 섭취량과 당시 영양 스냅샷입니다."));
+    for (const item of detail.items || []) {
+      const person = node("section", undefined, "scenario-log");
+      person.append(node("h3", `${item.member_name || "구성원"} · ${item.servings ?? "미확인"}인분`));
+      nutrition(person, item.nutrition);
+      if (item.data_quality === "incomplete") person.append(note("누락된 영양값은 0으로 계산하지 않습니다."));
+      content.append(person);
+    }
+    openDialog(detail.recipe_name || "식사 기록 상세", content);
+  }
   function report(root) {
     heading(root, "영양 관리", "가족 구성원별 영양과 조리·식사 기록을 확인하세요.");
     const filter = node("div", undefined, "button-row report-picker");
     filter.setAttribute("role", "group");
     filter.setAttribute("aria-label", "영양 현황 대상");
     for (const [key, label] of [["all", "우리 가족"], ...s.household.members.map(member => [member.id, member.name])]) {
-      const choice = button(label, () => { reportMember = key; render(); }, "filter");
+      const choice = button(label, () => run(() => { reportMember = key; return reloadReports(); }), "filter");
       choice.setAttribute("aria-pressed", String(reportMember === key));
       filter.append(choice);
     }
     root.append(filter);
+    const period = node("div", undefined, "button-row");
+    period.setAttribute("aria-label", "영양 조회 기간");
+    for (const [key, label] of [["today", "오늘"], ["week", "최근 7일"]]) {
+      const choice = button(label, () => run(() => { reportPeriod = key; return reloadReports(); }), "filter");
+      choice.setAttribute("aria-pressed", String(reportPeriod === key));
+      period.append(choice);
+    }
+    period.append(button("기록 다시 조회", () => run(() => reloadReports())));
+    root.append(period);
+    if (s.reportsStatus === "loading") {
+      root.append(connectionState("loading", "저장된 식사 이력과 영양 리포트를 조회하고 있습니다."));
+      return;
+    }
+    if (s.reportsStatus === "error") {
+      root.append(connectionState("error", s.reportsError || "저장된 기록을 조회하지 못했습니다. 기록이 없다는 뜻은 아닙니다."));
+      root.append(button("조회 재시도", () => run(() => reloadReports())));
+      return;
+    }
+    if (!s.nutritionReport || !s.history) {
+      root.append(connectionState("insufficient", "기록 다시 조회를 눌러 저장된 식사 기록을 확인해 주세요."));
+      return;
+    }
+    const storedReport = s.nutritionReport;
+    root.append(note(`${storedReport.start_date} ~ ${storedReport.end_date} · 한국 시간 · 저장된 섭취 기록 기준`));
     const person = s.household.members.find(member => member.id === reportMember);
     const chart = panel(root, person ? `${person.name}의 최근 영양 현황` : "가족 영양 현황");
-    const metrics = node("div", undefined, "nutrition-rows");
-    for (const nutrient of ["탄수화물", "단백질", "지방", "식이섬유"]) {
-      const row = node("div", undefined, "nutrition-row");
-      const track = node("span", undefined, "nutrition-track");
-      track.setAttribute("aria-hidden", "true");
-      const value = node("span", "—");
-      value.setAttribute("aria-label", "아직 계산되지 않음");
-      row.append(node("span", nutrient), track, value);
-      metrics.append(row);
-    }
-    chart.append(metrics, connectionState("pending", "기간별 영양 분석은 연동 예정이에요. 실제 섭취량을 확인한 기록부터 표시합니다."));
+    chart.append(note(`식사 기록 ${storedReport.meal_record_count}건 · 실제 섭취 ${storedReport.total_servings ?? "미확인"}인분`));
+    nutrition(chart, storedReport.nutrition_totals);
+    chart.append(note(`탄수화물 ${storedReport.nutrition_totals.carbohydrate_g ?? "미제공"} g · 지방 ${storedReport.nutrition_totals.fat_g ?? "미제공"} g`));
+    if (storedReport.data_quality === "incomplete") chart.append(note("누락된 항목이 있습니다. 미제공 값을 0으로 간주하지 않습니다."));
+    if (storedReport.data_quality === "empty") chart.append(connectionState("empty", "이 기간에 저장된 식사 기록이 없습니다."));
     const bottom = node("div", undefined, "grid-two nutrition-bottom");
     root.append(bottom);
     const supplement = panel(bottom, "보완이 필요한 영양소");
@@ -992,24 +1035,28 @@
     suggestion.disabled = true;
     supplement.append(suggestion);
 
-    const p = panel(bottom, "식사 기록 저장 확인");
-    p.append(note("이번 화면에서 서버 저장을 확인한 기록입니다. 과거 기록 조회는 연동 예정이에요."));
-    const receipts = s.receipts.filter(r => reportMember === "all" || r.items.some(item => item.member_id === reportMember));
-    if (!receipts.length) p.append(connectionState("insufficient", "이번 탭에서 확인한 기록이 없습니다. 과거 기록이 없다는 의미는 아닙니다."));
-    for (const r of receipts.slice().reverse()) {
+    const p = panel(bottom, "저장된 식사 이력");
+    p.append(note(`전체 ${s.history.total}건 · 현재 페이지 ${s.history.offset + 1}번부터 · 저장된 기록만 표시합니다.`));
+    if (!s.history.records.length) p.append(connectionState("empty", "조회 조건에 해당하는 저장 기록이 없습니다."));
+    for (const r of s.history.records) {
       const row = node("div", undefined, "scenario-log");
-      row.append(node("h3", `${r.name || "식사"} · 기록 ID ${r.record_id}`),
-        badge("식사 확인 완료", "positive"), badge("식후 평가 연동 예정"));
+      row.append(node("h3", `${r.recipe_name || "식사"} · 기록 ID ${r.record_id}`),
+        note(`${r.meal_date || "날짜 미확인"} · ${r.meal_type || "식사"}`), badge("서버 저장 기록", "positive"));
       for (const item of r.items) {
         if (reportMember !== "all" && reportMember !== item.member_id) continue;
         const name = s.household.members.find(member => member.id === item.member_id)?.name || "구성원";
         row.append(note(`${name} · 입력한 실제 섭취량 ${item.servings}인분`));
       }
-      row.append(note("서버 계산 1인분 영양"));
-      nutrition(row, r.nutrition_per_serving);
-      row.append(button("식후 평가", () => feedbackDialog(r)));
+      row.append(note("선택한 구성원의 저장된 실제 섭취 영양 합계"));
+      nutrition(row, r.nutrition_totals);
+      row.append(button("기록 상세", () => run(() => openMealDetail(r.record_id))));
+      row.append(button("식후 평가", () => feedbackDialog({ ...r, name: r.recipe_name })));
       p.append(row);
     }
+    const pages = node("div", undefined, "button-row");
+    if (s.history.offset > 0) pages.append(button("이전 기록", () => run(() => reloadReports(Math.max(0, s.history.offset - 20)))));
+    if (s.history.has_more) pages.append(button("다음 기록", () => run(() => reloadReports(s.history.offset + 20))));
+    p.append(pages);
   }
   function openMemberForm() {
     const form = node("form");
@@ -1128,6 +1175,7 @@
     $("#dialog-body").replaceChildren();
     lastAnswer = inventoryMessage = familyMessage = "";
     reportMember = "all";
+    reportPeriod = "week";
     Object.assign(inventoryView, { query: "", filter: "all", page: 1 });
   }
 
@@ -1221,4 +1269,13 @@
   current = location.hash.slice(1);
   if (!views.some(view => view.dataset.view === current)) current = "home";
   render();
+  setInterval(() => {
+    if (s.session && Date.now() >= s.session.expiresAt) {
+      api.clearSession();
+      if (dialog.open) closeDialog();
+      errorMessage = "세션이 만료되었습니다. 같은 가구로 다시 로그인하면 진행 중인 저장을 확인할 수 있습니다.";
+      errorStatus = 401;
+      render();
+    }
+  }, 1000);
 })();

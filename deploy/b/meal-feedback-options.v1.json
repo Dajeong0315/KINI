@@ -1,0 +1,5 @@
+{
+  "taste": ["taste_satisfied", "taste_neutral", "taste_dissatisfied"],
+  "seasoning": ["seasoning_bland", "seasoning_balanced", "seasoning_salty"],
+  "difficulty": ["difficulty_easy", "difficulty_moderate", "difficulty_hard"]
+}
