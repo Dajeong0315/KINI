@@ -1,0 +1,143 @@
+﻿모델,단계,구분,파라미터,값,설명
+YOLOv8m-cls,1단계 기준선,기본,시작 가중치,yolov8m-cls.pt,ImageNet 사전학습
+YOLOv8m-cls,1단계 기준선,기본,epochs,6,CPU 시간 제약
+YOLOv8m-cls,1단계 기준선,기본,patience,3,조기 종료
+YOLOv8m-cls,1단계 기준선,기본,batch,32,
+YOLOv8m-cls,1단계 기준선,기본,imgsz,224,
+YOLOv8m-cls,1단계 기준선,기본,freeze,8,앞쪽 0~7층 고정 (CPU 시간 단축)
+YOLOv8m-cls,1단계 기준선,기본,device,cpu,
+YOLOv8m-cls,1단계 기준선,기본,cache,ram,
+YOLOv8m-cls,1단계 기준선,기본,workers,4,
+YOLOv8m-cls,1단계 기준선,기본,fraction,1.0,
+YOLOv8m-cls,1단계 기준선,기본,seed,0,
+YOLOv8m-cls,1단계 기준선,기본,amp,true,
+YOLOv8m-cls,1단계 기준선,최적화,optimizer,auto,Ultralytics 자동 선택 (반복 수 1만 미만이면 AdamW)
+YOLOv8m-cls,1단계 기준선,최적화,lr0,0.01,optimizer=auto 일 때는 자동 계산 값으로 대체됨
+YOLOv8m-cls,1단계 기준선,최적화,lrf,0.01,
+YOLOv8m-cls,1단계 기준선,최적화,momentum,0.937,
+YOLOv8m-cls,1단계 기준선,최적화,weight_decay,0.0005,
+YOLOv8m-cls,1단계 기준선,최적화,warmup_epochs,3.0,
+YOLOv8m-cls,1단계 기준선,최적화,cos_lr,false,
+YOLOv8m-cls,1단계 기준선,최적화,nbs,64,
+YOLOv8m-cls,1단계 기준선,정규화,dropout,0.0,
+YOLOv8m-cls,1단계 기준선,증강,hsv_h,0.015,
+YOLOv8m-cls,1단계 기준선,증강,hsv_s,0.7,
+YOLOv8m-cls,1단계 기준선,증강,hsv_v,0.4,
+YOLOv8m-cls,1단계 기준선,증강,degrees,0.0,
+YOLOv8m-cls,1단계 기준선,증강,translate,0.1,
+YOLOv8m-cls,1단계 기준선,증강,scale,0.5,
+YOLOv8m-cls,1단계 기준선,증강,fliplr,0.5,
+YOLOv8m-cls,1단계 기준선,증강,auto_augment,randaugment,
+YOLOv8m-cls,1단계 기준선,증강,erasing,0.4,
+YOLOv8m-cls,1단계 기준선,결과,val top-1 / top-5,0.883 / 0.981,6 epoch
+YOLOv8m-cls,1단계 기준선,결과,test top-1 / top-5,0.876 / 0.968,
+CLIP-B/32 선형,2단계,특징,백본,CLIP ViT-B/32,고정 (학습 안 함)
+CLIP-B/32 선형,2단계,특징,특징 차원,512,
+CLIP-B/32 선형,2단계,특징,전처리,CLIP 기본 (224 center crop),
+CLIP-B/32 선형,2단계,특징,학습 증강,좌우반전 특징 추가 (데이터 2배),
+CLIP-B/32 선형,2단계,특징,정규화,L2 정규화 × 10,
+CLIP-B/32 선형,2단계,분류층,구조,Linear(512→20),
+CLIP-B/32 선형,2단계,최적화,optimizer,AdamW,
+CLIP-B/32 선형,2단계,최적화,lr 탐색,1e-3 / 3e-3,선택: 1e-3
+CLIP-B/32 선형,2단계,최적화,weight_decay 탐색,1e-4 / 1e-3 / 1e-2 / 1e-1,선택: 1e-4 (차이 거의 없음)
+CLIP-B/32 선형,2단계,최적화,epochs,300,
+CLIP-B/32 선형,2단계,최적화,batch,512,
+CLIP-B/32 선형,2단계,최적화,스케줄러,CosineAnnealing,
+CLIP-B/32 선형,2단계,정규화,label_smoothing,0.1,
+CLIP-B/32 선형,2단계,결과,val / test top-1,0.9246 / 0.9167,
+최종 앙상블,최종,공통,백본 목록,clip_b32 / clip_b16 / effv2s,모두 고정
+최종 앙상블,최종,공통,특징 정규화,L2 정규화 × 10 (SCALE=10),
+최종 앙상블,최종,공통,특징 추출 batch,64,
+최종 앙상블,최종,공통,DataLoader workers,6,
+최종 앙상블,최종,백본,CLIP ViT-B/32 입력,224px (CLIP 전처리),특징 512차원
+최종 앙상블,최종,백본,CLIP ViT-B/16 입력,224px (CLIP 전처리),특징 512차원
+최종 앙상블,최종,백본,EfficientNetV2-S 입력,288px resize + 288 crop (ImageNet 정규화),특징 1280차원 / IMAGENET1K_V1 가중치
+최종 앙상블,최종,분류층,구조,Dropout(0.2) → Linear(d→1024) → GELU → Dropout(0.5) → Linear(1024→20),백본마다 1개
+최종 앙상블,최종,분류층,hidden,1024,
+최종 앙상블,최종,분류층,입력 dropout,0.2,
+최종 앙상블,최종,분류층,중간 dropout,0.5,
+최종 앙상블,최종,최적화,optimizer,AdamW,
+최종 앙상블,최종,최적화,lr,1e-3,
+최종 앙상블,최종,최적화,weight_decay,1e-2,
+최종 앙상블,최종,최적화,epochs,150,
+최종 앙상블,최종,최적화,batch,256,
+최종 앙상블,최종,최적화,스케줄러,CosineAnnealing (T_max=150),
+최종 앙상블,최종,최적화,seed,0,
+최종 앙상블,최종,정규화,label_smoothing,0.1,
+최종 앙상블,최종,정규화,특징 잡음 증강,가우시안 σ=0.3,학습 때만 (정규화×10 공간 기준)
+최종 앙상블,최종,앙상블,가중치 탐색,0~10 정수 격자 (val top-1 최대),
+최종 앙상블,최종,앙상블,가중치 clip_b32,0.111,1/9
+최종 앙상블,최종,앙상블,가중치 clip_b16,0.667,6/9
+최종 앙상블,최종,앙상블,가중치 effv2s,0.222,2/9
+최종 앙상블,최종,학습 데이터,최종 학습,train + val (14280장),가중치는 train 학습 모델로 val 에서 정한 값 고정
+최종 앙상블,최종,추론,모름 기준값 (UNKNOWN_BELOW),0.5,앙상블 1등 확률이 이보다 낮으면 '모름'
+최종 앙상블,최종,추론,crop 여유 (PAD),0.1,YOLOE 상자를 사방 10% 넓혀 자름
+최종 앙상블,최종,결과,test top-1 / top-5,0.9476 / 0.9902,test_fridge_cls.py 재계산 값
+YOLOE-v8m (탐지),메인 파이프라인,탐지,모델,yoloe-v8m-seg.pt,글자 프롬프트 방식 (학습 없음)
+YOLOE-v8m (탐지),메인 파이프라인,탐지,YOLO_CONF,0.2,이 점수 이상만 개수로 셈
+YOLOE-v8m (탐지),메인 파이프라인,탐지,YOLO_UNCERTAIN_BELOW,0.35,이보다 낮으면 '불확실' 표시
+YOLOE-v8m (탐지),메인 파이프라인,탐지,agnostic_nms,true,품목이 달라도 겹친 상자 제거
+YOLOE-v8m (탐지),메인 파이프라인,전후 비교,IoU 매칭 기준,0.5,전/후 같은 물체 판정
+YOLOE-v8m (탐지),메인 파이프라인,전후 비교,YOLO_REGION_CHANGE_RATIO,0.15,자리 픽셀 변화가 이보다 적으면 '그대로 있음'
+YOLOE-v8m (탐지),메인 파이프라인,전후 비교,PIXEL_DIFF_THRESHOLD,25,평균 밝기 보정 후 픽셀 차이 기준
+YOLOE-v8m (탐지),메인 파이프라인,전후 비교,YOLO_CHANGE_MIN_CONF,0.35,새로 생기거나 사라진 물체 인정 최소 점수
+YOLOv8m-cls,1단계 기준선,학습로그,epoch 1,train_loss=2.0136; val_loss=0.8334; val_top1=0.7499; val_top5=0.9506; lr=0.000139,누적 15.2분 (runs/kaggle_fridge_cls/results.csv)
+YOLOv8m-cls,1단계 기준선,학습로그,epoch 2,train_loss=0.5946; val_loss=0.5398; val_top1=0.8429; val_top5=0.9770; lr=0.000232,누적 30.1분 (runs/kaggle_fridge_cls/results.csv)
+YOLOv8m-cls,1단계 기준선,학습로그,epoch 3,train_loss=0.3842; val_loss=0.4586; val_top1=0.8673; val_top5=0.9785; lr=0.000279,누적 43.2분 (runs/kaggle_fridge_cls/results.csv)
+YOLOv8m-cls,1단계 기준선,학습로그,epoch 4,train_loss=0.2964; val_loss=0.4168; val_top1=0.8752; val_top5=0.9804; lr=0.000211,누적 55.6분 (runs/kaggle_fridge_cls/results.csv)
+YOLOv8m-cls,1단계 기준선,학습로그,epoch 5,train_loss=0.2253; val_loss=0.4305; val_top1=0.8737; val_top5=0.9789; lr=0.000142,누적 67.9분 (runs/kaggle_fridge_cls/results.csv)
+YOLOv8m-cls,1단계 기준선,학습로그,epoch 6,train_loss=0.1823; val_loss=0.4210; val_top1=0.8830; val_top5=0.9814; lr=7.3e-05,누적 80.1분 (runs/kaggle_fridge_cls/results.csv)
+YOLOv8m-cls,1단계 기준선,학습로그,test (best.pt),top1=0.876; top5=0.968,시험 세트 최종
+CLIP-B/32 선형,2단계,실험결과,wd=1e-4 lr=1e-3,val_top1=0.9246,선택됨
+CLIP-B/32 선형,2단계,실험결과,wd=1e-4 lr=3e-3,val_top1=0.9212,
+CLIP-B/32 선형,2단계,실험결과,wd=1e-3 lr=1e-3,val_top1=0.9246,
+CLIP-B/32 선형,2단계,실험결과,wd=1e-3 lr=3e-3,val_top1=0.9207,
+CLIP-B/32 선형,2단계,실험결과,wd=1e-2 lr=1e-3,val_top1=0.9246,
+CLIP-B/32 선형,2단계,실험결과,wd=1e-2 lr=3e-3,val_top1=0.9202,
+CLIP-B/32 선형,2단계,실험결과,wd=1e-1 lr=1e-3,val_top1=0.9246,
+CLIP-B/32 선형,2단계,실험결과,wd=1e-1 lr=3e-3,val_top1=0.9246,
+CLIP-B/32 선형,2단계,실험결과,선택 설정 test,test_top1=0.9167,
+CLIP-B/32 조합,3단계,실험결과,MLP 분류층,val=0.9300; test=0.9251,
+CLIP-B/32 조합,3단계,실험결과,YOLOv8m-cls 단독,val=0.8830; test=0.8761,
+CLIP-B/32 조합,3단계,실험결과,선형 + YOLO (0.7:0.3),val=0.9280; test=0.9207,
+CLIP-B/32 조합,3단계,실험결과,MLP + YOLO (0.9:0.1),val=0.9315; test=0.9305,3단계 최고
+CLIP-B/32 조합,3단계,실험결과,선형 + MLP + YOLO (0.8:0.2),val=0.9339; test=0.9280,
+백본 비교,4단계,실험결과,CPU 속도 CLIP-B/32,22.4 장/초,"배치 32, 224px"
+백본 비교,4단계,실험결과,CPU 속도 CLIP-B/16,5.2 장/초,
+백본 비교,4단계,실험결과,CPU 속도 EfficientNetV2-S,15.5 장/초,
+백본 비교,4단계,실험결과,DINOv2 ViT-S/14,시험 못 함,torch.hub 원격 코드 실행이 권한 정책으로 차단
+백본 비교,4단계,실험결과,CLIP-B/32 + MLP,val=0.9266; test=0.9202,
+백본 비교,4단계,실험결과,CLIP-B/16 + MLP,val=0.9422; test=0.9422,
+백본 비교,4단계,실험결과,EfficientNetV2-S + MLP,val=0.8590; test=0.8643,
+백본 비교,4단계,실험결과,3개 앙상블 (1:6:2),val=0.9476; test=0.9447,
+추가 시도,5단계,실험결과,특징 이어붙이기 + MLP (seed 0/1/2),test=0.9398 / 0.9412 / 0.9378,미채택
+추가 시도,5단계,실험결과,이어붙이기 seed 3개 평균,val=0.9432; test=0.9398,미채택
+추가 시도,5단계,실험결과,이어붙이기 + YOLO (0.2),val=0.9427; test=0.9422,미채택
+추가 시도,5단계,실험결과,백본별 + YOLO 4개 (4:5:0:2),val=0.9486; test=0.9437,미채택
+추가 시도,5단계,실험결과,train+val 재학습 3개 (1:6:2),test=0.9476,채택 (최종)
+추가 시도,5단계,실험결과,train+val 재학습 4개 (YOLO 포함),test=0.9447,미채택
+추가 시도,5단계,실험결과,좌우반전 TTA + seed 3개,중단,확정 요청으로 특징 추출 중 중단
+최종 앙상블,검증,실험결과,test_fridge_cls.py 재계산,top1=0.9476 (1935/2042); top5=0.9902,저장 파일로 사진부터 다시 계산
+YOLOE-v8m (탐지),Unknown 처리,범용 프롬프트,YOLO_GENERIC_PROMPTS,object / item,어느 품목에도 안 맞는 물체를 받는 포괄 검색어
+YOLOE-v8m (탐지),Unknown 처리,범용 프롬프트,YOLO_UNKNOWN_CONF,0.5,범용어 상자는 이 점수 이상만 Unknown (배경 과탐지 방지)
+YOLOE-v8m (탐지),Unknown 처리,실험결과,범용 프롬프트 효과,Unknown 0개 (conf 0.05까지 낮춰도),h264·h265 두 영상: 구체 품목이 항상 더 높은 점수
+YOLOE-v8m (탐지),Unknown 처리,묶기,YOLO_FRAGMENT_CONF,0.1,묶음 찾기에만 쓰는 약한 조각 최소 점수 (혼자서는 개수 제외)
+YOLOE-v8m (탐지),Unknown 처리,묶기,YOLO_GROUP_MAX_CONF,0.45,이보다 낮은 점수의 조각만 묶음
+YOLOE-v8m (탐지),Unknown 처리,묶기,YOLO_GROUP_MAX_AREA,0.01,화면 넓이 대비 조각 최대 크기 (큰 오렌지 2개 오묶음 방지)
+YOLOE-v8m (탐지),Unknown 처리,묶기,YOLO_GROUP_GAP,0.15,짧은 변 대비 이 거리 이내면 붙어 있음
+YOLOE-v8m (탐지),Unknown 처리,이름표,생김새 특징,CLIP ViT-B/32 (512차원),상자 사방 10% 넓혀 crop
+YOLOE-v8m (탐지),Unknown 처리,이름표,USER_LABEL_SIM_SAME_PLACE,0.85,같은 자리(IoU≥0.5) 자동 적용 기준
+YOLOE-v8m (탐지),Unknown 처리,이름표,USER_LABEL_SIM,0.95,다른 자리 자동 적용 기준
+YOLOE-v8m (탐지),Unknown 처리,실험결과,포도 이름표 유사도,같은 포도 0.894~0.996 / 다른 물체 0.756~0.881,"주스병 0.881, 오렌지 0.844~0.850, 버터 0.841, 수박 0.756"
+YOLOE-v8m (탐지),Unknown 처리,실험결과,시연 영상 검증,"h265: Unknown 1(포도) → 이름 입력 후 포도 1, 오렌지 −1 / h264: 버터 −1, 오렌지 3",창 모드 2회 연속 동일
+위치 계산,Supabase 연동,LOC,FRIDGE_X_LABELS,L / C / R,화면 가로 3등분 → stock_event.loc_x
+위치 계산,Supabase 연동,LOC,FRIDGE_FLOOR_SPLITS,0.5,층 경계 (화면 위에서부터 비율) → loc_y
+위치 계산,Supabase 연동,LOC,FRIDGE_FLOOR_NUMBER_FROM_TOP,True,"DB 규칙: 1 = 위 칸, 2 = 아래 칸"
+Supabase,Supabase 연동,DB,스키마,supabase/schema.sql,food_item·capture·stock_event·fridge_stock + current_stock 뷰 + 함수 3개
+Supabase,Supabase 연동,DB,food_item 품목 수,25 (데모 초기 재고 6종),"인식 품목 19종 추가, shelf_days 임시값"
+Supabase,Supabase 연동,전송,SUPABASE_CONFIRM_MODE,local,local: 자동·y/n 으로 confirm/reject 호출 / ipad: pending 만 저장
+Supabase,Supabase 연동,전송,SUPABASE_BASELINE_ON_START,auto,영상 파일 시험 때만 첫 before 로 DB 재고 맞춤 (manual 이벤트)
+Supabase,Supabase 연동,전송,SUPABASE_REGISTER_MISSING_ITEMS / SUPABASE_DEFAULT_SHELF_DAYS,True / 7,사용자 새 품목을 food_item 에 자동 등록
+Supabase,Supabase 연동,전송,SUPABASE_TIMEOUT,5.0초,"별도 스레드 1개 (순서 보장), 5xx·네트워크 오류는 대기열 보관"
+Supabase,Supabase 연동,실험결과,통합 시험 (PostgreSQL + REST 흉내),8종 통과,시작 재고 맞춤·확인 중복 없음·재고 부족 거부·거절·새 품목·재전송·anon 거부
+Supabase,Supabase 연동,실험결과,h265 영상 전체 실행,"capture 1, 이벤트 12 confirmed",최종 버터1·수박1·오렌지2·포도1·주스2

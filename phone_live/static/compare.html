@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0b0f14">
+  <title>전/후 비교 — 재고 반영</title>
+  <script>
+    // PC 브라우저에서 열면: PC 카메라를 쓰지 않고(카메라 권한 요청 없음) 핸드폰 카메라 화면을 받아 보여 주는
+    // PC 화면(/compare-view)으로 — /viewer 와 같은 방식. 핸드폰은 PC 화면의 QR 코드로 이 페이지에 접속.
+    // ?phone=1 이면 PC 에서도 촬영 화면 (시험용)
+    (function () {
+      const ua = navigator.userAgent;
+      const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);  // iPadOS 는 Mac 으로 보임
+      if (!mobile && !new URLSearchParams(location.search).has("phone")) location.replace("/compare-view");
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body { overflow: hidden; touch-action: manipulation; }
+    #halves { position: fixed; inset: 0; display: grid; grid-template-rows: 1fr 1fr; background: #000; }
+    .half { position: relative; overflow: hidden; border-bottom: 2px solid #111827; }
+    .half canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+    /* 카메라 영상은 찍는 칸 안에 '보이게' 둠: 휴대폰 브라우저(iOS Safari·일부 Android)는 안 보이는 영상의
+       프레임 갱신을 멈춰서, 숨긴 영상을 캔버스에 옮겨 그리면 화면이 까맣게 나옴 (/camera 와 같은 방식) */
+    .half video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; z-index: 0; background: #000; }
+    video.mirror { transform: scaleX(-1); }
+    #parking { position: fixed; left: 0; bottom: 0; width: 2px; height: 2px; overflow: hidden; opacity: 0.01; pointer-events: none; }
+    .half.live { box-shadow: inset 0 0 0 3px var(--accent); }
+    .badge { position: absolute; left: 10px; top: 10px; z-index: 3; display: flex; gap: 6px; align-items: center; }
+    #hBefore .badge { top: calc(env(safe-area-inset-top) + 48px); }
+    .badge b { background: rgba(0,0,0,0.6); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-size: 14px; }
+    .shot { position: absolute; right: 10px; bottom: 10px; z-index: 3; padding: 12px 16px; font-size: 15px; }
+    #hAfter .shot { bottom: auto; top: 10px; }
+    .shot[hidden] { display: none; }
+    #top { position: fixed; top: 0; left: 0; right: 0; z-index: 5; display: flex; gap: 6px; align-items: center;
+      padding: calc(env(safe-area-inset-top) + 8px) 10px 8px; background: linear-gradient(rgba(0,0,0,0.65), transparent); }
+    #top .sp { flex: 1; }
+    #top a, #top button { font-size: 13px; padding: 6px 12px; }
+    #top a { color: var(--text); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,0.1); }
+    #sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: none; max-height: 46vh; overflow-y: auto;
+      padding: 12px 12px calc(env(safe-area-inset-bottom) + 12px); background: rgba(11,15,20,0.94);
+      border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; }
+    #sheet.show { display: block; }
+    #sheet.min .body { display: none; }
+    #sheet .head { display: flex; align-items: center; gap: 8px; font-weight: 700; margin-bottom: 8px; }
+    #sheet .head span { flex: 1; }
+    #sheet .head button { padding: 4px 10px; font-size: 12px; }
+    .rows { display: grid; gap: 6px; margin: 0 0 10px; padding: 0; list-style: none; }
+    .rows li { display: flex; gap: 8px; align-items: center; font-size: 15px; padding: 8px 10px; border-radius: 10px;
+      background: rgba(255,255,255,0.06); border: 1px solid var(--line); }
+    .rows li .sign { font-weight: 800; width: 1.2em; text-align: center; }
+    .rows li.add .sign { color: var(--ok); }
+    .rows li.rem .sign { color: var(--bad); }
+    .rows li small { margin-left: auto; color: var(--muted); font-size: 12px; }
+    .note { font-size: 13px; line-height: 1.45; margin: 0 0 10px; padding: 8px 10px; border-radius: 10px; }
+    .note.warn { background: rgba(239,68,68,0.18); border: 1px solid rgba(239,68,68,0.5); }
+    .note.info { background: rgba(56,189,248,0.12); border: 1px solid rgba(56,189,248,0.4); }
+    .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .acts button { padding: 13px 8px; font-size: 15px; }
+    .acts .wide { grid-column: 1 / -1; }
+    button.ok { background: var(--ok); color: #052e16; border-color: transparent; font-weight: 700; }
+    button:disabled { opacity: 0.6; }
+    #busy { position: fixed; inset: 0; display: none; place-content: center; z-index: 8; pointer-events: none; }
+    body.busy #busy { display: grid; }
+    #busy div { background: rgba(0,0,0,0.75); color: #fff; padding: 14px 20px; border-radius: 12px; font-weight: 600; }
+    #start { position: fixed; inset: 0; display: grid; place-content: center; gap: 14px; text-align: center;
+      padding: 24px; background: var(--bg); z-index: 10; }
+    #start p { max-width: 340px; margin: 0 auto; line-height: 1.5; }
+    #err { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <div id="halves">
+    <section class="half" id="hBefore">
+      <canvas id="cBefore"></canvas>
+      <div class="badge"><b>① 전</b><b id="sBefore" class="muted">문 열기 전 냉장고</b></div>
+      <button class="shot primary" id="bBefore">📸 전 촬영</button>
+    </section>
+    <section class="half" id="hAfter">
+      <canvas id="cAfter"></canvas>
+      <div class="badge"><b>② 후</b><b id="sAfter" class="muted">넣거나 꺼낸 뒤</b></div>
+      <button class="shot primary" id="bAfter" hidden>📸 후 촬영</button>
+    </section>
+  </div>
+
+  <div id="top">
+    <a href="/camera">← 실시간 인식</a>
+    <span class="pill" id="pDb"><span class="led"></span><span>DB 확인 중…</span></span>
+    <span class="sp"></span>
+    <button id="flip">⟲ 카메라</button>
+  </div>
+
+  <div id="sheet">
+    <div class="head"><span id="sheetTitle"></span><button id="sheetMin">접기</button></div>
+    <div class="body" id="sheetBody"></div>
+  </div>
+
+  <div id="busy"><div id="busyText">🔍 비교 중…</div></div>
+
+  <div id="start">
+    <h2 style="margin:0">📷 전/후 비교</h2>
+    <p class="muted">냉장고 문을 열기 <b>전</b>과 넣거나 꺼낸 <b>후</b>를 찍으면, 무엇이 들어오고 나갔는지 계산해 재고 DB 에 반영합니다.<br>
+      두 사진은 <b>같은 위치·각도</b>에서 찍어 주세요 (후를 찍을 때 전 사진이 흐리게 겹쳐 보입니다).</p>
+    <button id="go" class="primary">카메라 켜기</button>
+    <p id="err"></p>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div id="parking"><video id="video" playsinline autoplay muted></video></div>
+
+<script src="/static/common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const video = $("video");
+const grab = document.createElement("canvas"), gctx = grab.getContext("2d");
+const SHOT_MAX = 1280;          // 보내는 사진의 긴 변 (식재료 파악하기와 같음)
+const MIN_CONF = 0.2;           // 이보다 낮은 상자는 숨김 (Unknown 은 0.25 이상이라 보임)
+const GHOST = 0.35;             // 후 촬영 때 겹쳐 보이는 전 사진의 진하기
+const LOC_X = { L: "왼쪽", C: "가운데", R: "오른쪽" }, LOC_Y = { 1: "위 칸", 2: "아래 칸" };
+let facing = "environment", stream = null;
+let shots = { before: null, after: null };     // { blob, canvas, w, h }
+let live = "before";                            // 지금 카메라 화면을 보여 주는 칸 (before / after / null)
+let res = null, committed = null;
+const hits = { before: [], after: [] };
+const panes = { before: { el: $("hBefore"), cv: $("cBefore") }, after: { el: $("hAfter"), cv: $("cAfter") } };
+
+function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("show"), 2400); }
+function busy(on, text) { document.body.classList.toggle("busy", on); if (text) $("busyText").textContent = text; }
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const locText = l => { if (!l) return ""; const [x, y] = l.split(","); return `${LOC_X[x] || x} ${LOC_Y[y] || y}`; };
+
+// ---------------- 카메라 ----------------
+async function openCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  const base = { width: { ideal: 1280 }, height: { ideal: 720 } };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...base, facingMode: { exact: facing } } });
+  } catch (e) {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...base, facingMode: { ideal: facing } } });
+  }
+  video.srcObject = stream;
+  await video.play();
+  const s = stream.getVideoTracks()[0].getSettings();
+  if (s.facingMode) facing = s.facingMode;
+  video.classList.toggle("mirror", facing === "user");
+  placeVideo();
+}
+// 카메라 영상을 지금 찍는 칸 안으로 옮김 (찍는 칸이 없으면 보관 자리). 옮긴 뒤 재생이 멈추는 브라우저가 있어 다시 재생
+function placeVideo() {
+  const host = live ? panes[live].el : $("parking");
+  if (video.parentElement !== host) {
+    host.insertBefore(video, host.firstChild);
+    video.play().catch(() => {});
+  }
+}
+$("go").onclick = async () => {
+  $("err").textContent = "";
+  if (!navigator.mediaDevices?.getUserMedia) {
+    $("err").innerHTML = "이 브라우저에서 카메라를 열 수 없습니다.<br>주소가 <b>https://</b> 로 시작하는지 확인하세요."; return;
+  }
+  try { await openCamera(); $("start").style.display = "none"; keepAwake(); cmpConnect(); }
+  catch (e) { $("err").textContent = `카메라를 열지 못했습니다: ${e.name} — 브라우저 설정에서 카메라 권한을 허용해 주세요.`; }
+};
+$("flip").onclick = async () => {
+  const prev = facing; facing = facing === "user" ? "environment" : "user";
+  try { await openCamera(); toast(facing === "user" ? "전면 카메라" : "후면 카메라"); }
+  catch (e) { facing = prev; await openCamera(); toast("다른 카메라를 열 수 없습니다"); }
+  sendState();
+};
+async function keepAwake() {
+  try { await navigator.wakeLock?.request("screen");
+        document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && keepAwake(), { once: true }); }
+  catch (e) {}
+}
+fetch("/api/info").then(r => r.json()).then(i => {
+  $("pDb").classList.toggle("on", !!i.db);
+  $("pDb").lastElementChild.textContent = i.db ? "재고 DB 연결" : "DB 미설정 (비교만)";
+}).catch(() => {});
+
+// ---------------- PC 비교 화면(/compare-view)으로 보내기 ----------------
+const LIVE_MAX = 640, LIVE_FPS = 6;   // PC 에 보내는 실시간 화면 (촬영 중인 칸만)
+let ws = null;
+function cmpConnect() {
+  ws = new WebSocket(wsUrl("/ws/compare?role=phone"));
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {                    // 다시 연결되면 지금 사진·상태를 다시 보냄
+    for (const side of ["before", "after"]) if (shots[side]) sendShot(side);
+    sendState();
+  };
+  ws.onclose = () => setTimeout(cmpConnect, 1500);
+}
+function wsSend(data) { if (ws && ws.readyState === 1) ws.send(data); }
+function sendShot(side) {
+  wsSend(new Blob([new Uint8Array([side === "before" ? 1 : 2]), shots[side].blob]));
+}
+function sendState() {
+  wsSend(JSON.stringify({ type: "state", live, facing: facing === "user" ? "전면" : "후면",
+    shots: { before: !!shots.before, after: !!shots.after },
+    stage: committed ? "committed" : res ? "compared" : shots.before && shots.after ? "ready" : "shoot" }));
+}
+const liveGrab = document.createElement("canvas"), lctx = liveGrab.getContext("2d");
+setInterval(() => {
+  if (!live || !ws || ws.readyState !== 1 || !video.videoWidth || ws.bufferedAmount > 300000) return;
+  const s = Math.min(1, LIVE_MAX / Math.max(video.videoWidth, video.videoHeight));
+  liveGrab.width = Math.round(video.videoWidth * s); liveGrab.height = Math.round(video.videoHeight * s);
+  lctx.drawImage(video, 0, 0, liveGrab.width, liveGrab.height);
+  liveGrab.toBlob(b => b && live && wsSend(new Blob([new Uint8Array([0]), b])), "image/jpeg", 0.6);
+}, 1000 / LIVE_FPS);
+
+// ---------------- 촬영 ----------------
+async function snap() {
+  const s = Math.min(1, SHOT_MAX / Math.max(video.videoWidth, video.videoHeight));
+  grab.width = Math.round(video.videoWidth * s); grab.height = Math.round(video.videoHeight * s);
+  gctx.drawImage(video, 0, 0, grab.width, grab.height);            // 거울 아님 (원본 그대로)
+  const copy = document.createElement("canvas"); copy.width = grab.width; copy.height = grab.height;
+  copy.getContext("2d").drawImage(grab, 0, 0);
+  const blob = await new Promise(ok => grab.toBlob(ok, "image/jpeg", 0.9));
+  return { blob, canvas: copy, w: copy.width, h: copy.height };
+}
+async function take(side) {
+  if (!video.videoWidth) return;
+  shots[side] = await snap();
+  sendShot(side);                                    // PC 비교 화면에도
+  res = committed = null;
+  live = side === "before" ? (shots.after ? null : "after") : null;
+  update();
+  toast(side === "before" ? "전 사진 저장 — 이제 넣거나 꺼낸 뒤 같은 위치에서 후를 찍으세요" : "후 사진 저장 — 비교하기를 누르세요");
+}
+function retake(side) {
+  shots[side] = null; res = committed = null;
+  if (side === "before") { shots.after = null; }        // 전을 다시 찍으면 후도 다시 (같은 장면 기준)
+  live = side; update();
+}
+$("bBefore").onclick = () => shots.before ? retake("before") : take("before");
+$("bAfter").onclick = () => shots.after ? retake("after") : take("after");
+
+// ---------------- 비교 → 이름 붙이기 → DB ----------------
+async function compare() {
+  if (!shots.before || !shots.after) return;
+  busy(true, "🔍 전/후 비교 중… (10~30초)");
+  try {
+    const fd = new FormData();
+    fd.append("before", shots.before.blob, "before.jpg"); fd.append("after", shots.after.blob, "after.jpg");
+    const r = await fetch("/api/compare", { method: "POST", body: fd });
+    const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status);
+    res = j; committed = null; update();
+  } catch (e) { toast(`비교 실패: ${e.message}`); }
+  finally { busy(false); }
+}
+async function label(side, d) {
+  const name = prompt(d.hint ? `이 물체의 이름은? (포장 글씨: ${d.hint})` : "이 물체의 이름은? (예: 인절미)", d.hint || "");
+  if (!name || !name.trim()) return;
+  busy(true, "✏️ 기억하고 다시 비교 중…");
+  try {
+    const r = await fetch("/api/compare/label", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cid: res.cid, side, name: name.trim(), box: d.box }) });
+    const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status);
+    res = j; committed = null; update(); toast(`기억함: ${j.learned}`);
+  } catch (e) { toast(`이름 붙이기 실패: ${e.message}`); }
+  finally { busy(false); }
+}
+async function commit(decision) {
+  if (decision === "confirm" && !res.added.length && !res.removed.length && !confirm("재고 변화가 없습니다. 촬영 기록만 저장할까요?")) return;
+  busy(true, decision === "confirm" ? "💾 재고 DB 에 반영 중…" : "💾 거절로 기록 중…");
+  try {
+    const r = await fetch("/api/compare/commit", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cid: res.cid, decision }) });
+    const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status);
+    committed = j; update();
+  } catch (e) { toast(`DB 반영 실패: ${e.message}`); }
+  finally { busy(false); }
+}
+function restart() { shots = { before: null, after: null }; res = committed = null; live = "before"; update(); }
+
+// ---------------- 화면 ----------------
+function sheet(title, html) {
+  $("sheet").classList.add("show"); $("sheetTitle").textContent = title; $("sheetBody").innerHTML = html;
+}
+$("sheetMin").onclick = () => { const s = $("sheet"); s.classList.toggle("min");
+  $("sheetMin").textContent = s.classList.contains("min") ? "펼치기" : "접기"; };
+
+function changeRows() {
+  const row = (x, cls, sign) => `<li class="${cls}"><span class="sign">${sign}</span>${esc(x.name)} <b>${x.quantity}</b>`
+    + `<small>${esc((x.locations || []).map(locText).filter(Boolean).join(", "))}</small></li>`;
+  const rows = res.added.map(x => row(x, "add", "+")).concat(res.removed.map(x => row(x, "rem", "−")));
+  return rows.length ? `<ul class="rows">${rows.join("")}</ul>` : `<p class="note info">들어오거나 나간 식재료가 없습니다.</p>`;
+}
+function unknownNote() {
+  const n = unknownCount(res.after, MIN_CONF) + unknownCount(res.before, MIN_CONF);
+  return n ? `<p class="note warn">❓ 모르는 물체 ${n}개 — 빨간 상자를 누르면 이름을 붙일 수 있습니다. 이름이 없는 물체는 DB 에 저장하지 않습니다.</p>` : "";
+}
+function update() {
+  sendState();
+  placeVideo();
+  for (const side of ["before", "after"]) panes[side].el.classList.toggle("live", live === side);
+  $("bBefore").textContent = shots.before ? "↺ 다시 찍기" : "📸 전 촬영";
+  $("bAfter").hidden = !shots.before;
+  $("bAfter").textContent = shots.after ? "↺ 다시 찍기" : "📸 후 촬영";
+  $("sBefore").textContent = shots.before ? "✓ 저장됨" : "문 열기 전 냉장고";
+  $("sAfter").textContent = shots.after ? "✓ 저장됨" : shots.before ? "넣거나 꺼낸 뒤 (전 사진이 겹쳐 보임)" : "① 을 먼저 찍으세요";
+  if (!shots.before || !shots.after) { $("sheet").classList.remove("show"); return; }
+  $("sheet").classList.remove("min"); $("sheetMin").textContent = "접기";
+  if (!res) {
+    sheet("② 까지 찍었습니다", `<div class="acts"><button class="primary wide" onclick="compare()">🔍 비교하기</button></div>`);
+  } else if (!committed) {
+    const reasons = res.reasons?.length ? `<p class="note info">확인할 것: ${esc(res.reasons.join(" · "))}</p>` : "";
+    sheet(`비교 결과 · ${(res.ms / 1000).toFixed(1)}초`, changeRows() + unknownNote() + reasons
+      + `<div class="acts"><button class="ok" onclick="commit('confirm')">✅ DB 에 반영</button>`
+      + `<button onclick="commit('reject')">✖ 거절</button>`
+      + `<button class="wide" onclick="restart()">↺ 처음부터</button></div>`);
+  } else {
+    const c = committed;
+    const ev = c.events.length ? `<ul class="rows">${c.events.map(e => `<li class="${e.delta > 0 ? "add" : "rem"}"><span class="sign">${e.delta > 0 ? "+" : "−"}</span>`
+      + `${esc(e.name)} <b>${Math.abs(e.delta)}</b><small>${{ confirmed: "반영됨", rejected: "거절됨", pending: "확인 대기" }[e.status] || e.status}</small></li>`).join("")}</ul>`
+      : `<p class="note info">저장한 변경 없음 (촬영 기록만 저장)</p>`;
+    const al = c.alerts.map(a => `<p class="note warn">⚠️ 확인 필요: ${esc(a.name)} ${a.delta} — DB 재고보다 많이 빼려고 해서 반영하지 않았습니다 (대기 상태로 남김).</p>`).join("");
+    const wait = c.waiting ? `<p class="note warn">📡 DB 저장 대기 중 ${c.waiting}건 — 연결되면 다음 반영 때 다시 보냅니다.</p>` : "";
+    const stock = c.stock ? `<p class="note info">현재 DB 재고: ${c.stock.length ? c.stock.map(s => `${esc(s.name)} ${s.qty}`).join(", ") : "없음"}</p>` : "";
+    sheet(c.decision === "confirm" ? "✅ 재고 DB 에 반영했습니다" : c.decision === "reject" ? "✖ 거절로 기록했습니다" : "💾 대기 상태로 저장했습니다",
+      ev + al + wait + stock + `<div class="acts"><button class="primary wide" onclick="restart()">📷 새로 찍기</button></div>`);
+  }
+}
+
+function fit(w, h, cv) { return fitRect(w, h, cv.clientWidth, cv.clientHeight, "contain"); }
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  for (const side of ["before", "after"]) {
+    const cv = panes[side].cv, W = cv.clientWidth, H = cv.clientHeight, ctx = cv.getContext("2d");
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    hits[side] = [];
+    if (live === side && video.videoWidth) {
+      const r = fit(video.videoWidth, video.videoHeight, cv);
+      ctx.save();
+      if (facing === "user") { ctx.translate(r.x * 2 + r.w, 0); ctx.scale(-1, 1); }      // 전면: 거울 화면 (영상과 같게)
+      // 카메라 영상은 칸 안의 <video> 가 직접 보여 줌 → 캔버스는 그 위에 겹쳐 보기만
+      if (side === "after" && shots.before) {                                            // 같은 위치 맞추기
+        ctx.globalAlpha = GHOST; ctx.drawImage(shots.before.canvas, r.x, r.y, r.w, r.h); ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+    } else if (shots[side]) {
+      const r = fit(shots[side].w, shots[side].h, cv);
+      ctx.drawImage(shots[side].canvas, r.x, r.y, r.w, r.h);
+      if (res && res[side]) drawDetections(ctx, res[side], r, { minConf: MIN_CONF, hit: hits[side] });
+    } else {
+      ctx.fillStyle = "#9ca3af"; ctx.font = "15px system-ui, sans-serif"; ctx.textAlign = "center";
+      ctx.fillText(side === "after" ? "① 전을 먼저 찍으세요" : "", W / 2, H / 2); ctx.textAlign = "left";
+    }
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// 결과 사진의 빨간(Unknown) 상자를 누르면 이름 입력
+for (const side of ["before", "after"]) {
+  panes[side].cv.addEventListener("click", ev => {
+    if (!res) return;
+    const b = panes[side].cv.getBoundingClientRect(), x = ev.clientX - b.left, y = ev.clientY - b.top;
+    const h = hits[side].filter(o => x >= o.X && x <= o.X + o.W && y >= o.Y && y <= o.Y + o.H && o.d.kind === "unknown");
+    if (h.length) label(side, h[0].d);
+  });
+}
+update();
+</script>
+</body>
+</html>

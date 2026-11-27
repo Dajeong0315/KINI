@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>냉장고 실시간 인식</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    main { min-height: 100%; display: grid; place-content: center; gap: 18px; padding: 24px 16px; text-align: center; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .go { display: block; text-decoration: none; color: var(--text); padding: 22px 26px; border-radius: 18px;
+      border: 1px solid var(--line); background: rgba(255,255,255,0.06); min-width: min(320px, 90vw); }
+    .go strong { display: block; font-size: 20px; margin-bottom: 4px; }
+    .go span { color: var(--muted); font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div>
+      <h1>냉장고 식재료 실시간 인식</h1>
+      <div class="muted">fridge_vision 과 같은 YOLOE-v8m 모델</div>
+    </div>
+    <a class="go" href="/camera"><strong>📱 카메라 (핸드폰)</strong><span>이 기기의 카메라로 인식</span></a>
+    <a class="go" href="/compare"><strong>📷 전/후 비교 (핸드폰)</strong><span>전·후 사진으로 넣고 꺼낸 식재료를 재고 DB 에 반영 (PC 에서 누르면 PC 비교 화면)</span></a>
+    <a class="go" href="/viewer"><strong>🖥 화면 보기 (PC)</strong><span>핸드폰 화면과 인식 결과 보기</span></a>
+    <a class="go" href="/compare-view"><strong>🖥 전/후 비교 보기 (PC)</strong><span>핸드폰 전/후 사진·비교 결과·재고 DB 반영 보기</span></a>
+  </main>
+</body>
+</html>
