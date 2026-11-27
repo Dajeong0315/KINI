@@ -1,0 +1,42 @@
+# 비밀값
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# 실행 중 생기는 파일 (사진·결과·재고·전송 대기열, 사용자 이름표)
+captures/
+user_labels.json
+# 재인식: 냉장고 안 물체 목록·등록 물체 갤러리(잘라낸 사진 포함)·평가용 사진 (개인 사진이라 올리지 않음)
+state/
+gallery/
+eval_reid/
+dummy/
+tests/_tmp/
+
+# 자동으로 내려받는 모델 파일 (수십~수백 MB)
+#   단, 검색어 임베딩 NPZ(약 100KB)는 포함 → 인터넷 없이도 실행 가능 (tools/build_prompt_cache.py 로 다시 만듦)
+models/*
+!models/prompts_*.npz
+weights/
+*.pt
+*.ts
+
+# 학습 기록·특징 캐시·로그
+runs/
+*.log
+logs/
+.pytest_cache/
+reports/images/
+
+# VS Code 실행 설정은 README 의 실행 방법과 짝이라 포함 (KINI 루트 .gitignore 의 .vscode/ 제외를 이 폴더에서만 해제)
+!.vscode/
+.vscode/*
+!.vscode/launch.json
+
+# OpenVINO 내장 그래픽 컴파일러가 실행 폴더에 남기는 진단 파일
+kernel.errors.txt

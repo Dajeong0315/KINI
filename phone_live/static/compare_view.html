@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PC 화면 — 전/후 비교</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body { display: grid; grid-template-columns: 1fr 360px; height: 100vh; overflow: hidden; }
+    #halves { display: grid; grid-template-rows: 1fr 1fr; background: #000; min-height: 0; }
+    .half { position: relative; overflow: hidden; border-bottom: 2px solid #111827; }
+    .half canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .half.live { box-shadow: inset 0 0 0 3px var(--accent); }
+    .badge { position: absolute; left: 12px; top: 12px; z-index: 2; display: flex; gap: 6px; }
+    .badge b { background: rgba(0,0,0,0.6); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; font-size: 15px; }
+    .badge b.on { background: var(--accent); color: #062033; border-color: transparent; }
+    .empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; color: var(--muted); gap: 6px; }
+    aside { border-left: 1px solid var(--line); padding: 18px; overflow-y: auto; display: grid; gap: 18px; align-content: start;
+      background: #0f141b; }
+    h2 { font-size: 13px; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    #stage { font-size: 18px; font-weight: 700; }
+    #stageSub { font-size: 13px; color: var(--muted); margin-top: 4px; line-height: 1.45; }
+    .rows { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+    .rows li { display: flex; gap: 8px; align-items: center; font-size: 15px; padding: 8px 10px; border-radius: 10px;
+      background: rgba(255,255,255,0.05); border: 1px solid var(--line); }
+    .rows li .sign { font-weight: 800; width: 1.2em; text-align: center; }
+    .rows li.add .sign { color: var(--ok); }
+    .rows li.rem .sign { color: var(--bad); }
+    .rows li small { margin-left: auto; color: var(--muted); font-size: 12px; }
+    .note { font-size: 13px; line-height: 1.45; margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; }
+    .note.warn { background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.5); }
+    .note.info { background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.4); }
+    .note.ok { background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.45); }
+    #qr { background: #fff; padding: 10px; border-radius: 10px; width: fit-content; }
+    #urls a { color: var(--accent); word-break: break-all; font-size: 13px; display: block; margin-top: 4px; }
+    .legend { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+    @media (max-width: 760px) {
+      body { grid-template-columns: 1fr; grid-template-rows: 70vh auto; overflow: auto; height: auto; }
+      aside { border-left: 0; border-top: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+  <div id="halves">
+    <section class="half" id="hBefore">
+      <canvas id="cBefore"></canvas>
+      <div class="empty" id="eBefore"><div style="font-size:36px">📷</div><div>핸드폰에서 ① 전 사진을 찍으면 여기에 나옵니다</div></div>
+      <div class="badge"><b>① 전</b><b id="sBefore">기다리는 중</b></div>
+    </section>
+    <section class="half" id="hAfter">
+      <canvas id="cAfter"></canvas>
+      <div class="empty" id="eAfter"><div>② 후 사진</div></div>
+      <div class="badge"><b>② 후</b><b id="sAfter">기다리는 중</b></div>
+    </section>
+  </div>
+
+  <aside>
+    <section class="row">
+      <span class="pill" id="pPhone"><span class="led"></span><span>핸드폰 기다리는 중</span></span>
+      <span class="pill" id="pDb"><span class="led"></span><span>DB 확인 중…</span></span>
+      <span class="pill" id="pFacing">카메라 –</span>
+    </section>
+
+    <section>
+      <div id="stage">① 전 사진 찍는 중</div>
+      <div id="stageSub">핸드폰 전/후 비교 화면의 진행 상황이 그대로 보입니다 (보기 전용).</div>
+    </section>
+
+    <section id="resultSec" style="display:none">
+      <h2 id="resultTitle">비교 결과</h2>
+      <div id="result"></div>
+    </section>
+
+    <section id="dbSec" style="display:none">
+      <h2>재고 DB</h2>
+      <div id="db"></div>
+    </section>
+
+    <section class="row">
+      <button id="full">전체 화면</button>
+      <button id="shot">화면 저장</button>
+      <a href="/viewer" style="color:var(--accent);font-size:13px;align-self:center">← 실시간 인식 화면</a>
+    </section>
+
+    <section class="legend">
+      <h2>상자 색</h2>
+      <div><i style="background:#38bdf8"></i>포장 글씨로 읽은 이름</div>
+      <div><i style="background:#22c55e"></i>생김새로 인식한 품목 (신뢰도 75% 이상)</div>
+      <div><i style="background:#facc15"></i>사용자가 이름 붙인 품목</div>
+      <div><i style="background:#ef4444"></i>Unknown — 핸드폰에서 상자를 누르면 이름 입력</div>
+    </section>
+
+    <section>
+      <h2>핸드폰으로 접속 (전/후 비교)</h2>
+      <div id="qr"></div>
+      <div id="urls" class="muted" style="margin-top:8px;font-size:13px"></div>
+      <p class="muted" style="font-size:12px;line-height:1.5;margin:8px 0 0">같은 와이파이에서 접속 → '안전하지 않음' 경고에서 [고급] → [계속]</p>
+    </section>
+  </aside>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="/static/common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const MIN_CONF = 0.2, GHOST = 0.35;
+const LOC_X = { L: "왼쪽", C: "가운데", R: "오른쪽" }, LOC_Y = { 1: "위 칸", 2: "아래 칸" };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const locText = l => { if (!l) return ""; const [x, y] = l.split(","); return `${LOC_X[x] || x} ${LOC_Y[y] || y}`; };
+let state = { live: "before", shots: { before: false, after: false }, stage: "shoot" };
+let shots = { before: null, after: null }, liveFrame = null, liveAt = 0, res = null, committed = null;
+const panes = { before: $("cBefore"), after: $("cAfter") };
+
+function setShot(side, bmp) {
+  if (shots[side]) shots[side].close?.();
+  shots[side] = bmp;
+}
+function clearFrom(side) {          // 전을 다시 찍으면 후·결과도 지움 (핸드폰과 같음)
+  if (side === "before") { setShot("before", null); setShot("after", null); }
+  else setShot("after", null);
+  res = committed = null;
+}
+
+function connect() {
+  const ws = new WebSocket(wsUrl("/ws/compare?role=view"));
+  ws.binaryType = "arraybuffer";
+  // 메시지는 도착 순서대로 하나씩 처리 (사진 디코딩을 기다리는 사이 뒤의 결과 메시지가 먼저 처리되면,
+  // 사진 처리 때 결과를 지워 버림 — 늦게 연 화면에서 실제로 발생)
+  let chain = Promise.resolve();
+  ws.onmessage = ev => { chain = chain.then(() => handle(ev)).catch(e => console.warn(e)); };
+  ws.onclose = () => { $("pPhone").classList.remove("on"); setTimeout(connect, 1500); };
+}
+async function handle(ev) {
+  {
+    if (ev.data instanceof ArrayBuffer) {
+      const tag = new Uint8Array(ev.data, 0, 1)[0];
+      const bmp = await createImageBitmap(new Blob([ev.data.slice(1)], { type: "image/jpeg" }));
+      if (tag === 0) { liveFrame?.close?.(); liveFrame = bmp; liveAt = performance.now(); }
+      else if (tag === 1) { clearFrom("before"); setShot("before", bmp); }
+      else if (tag === 2) { clearFrom("after"); setShot("after", bmp); }
+      update(); return;
+    }
+    const m = JSON.parse(ev.data);
+    if (m.type === "mode" && m.mode === "camera") {          // 핸드폰이 실시간 인식 화면을 열면 PC 도 실시간 화면으로
+      location.href = "/viewer"; return;
+    }
+    if (m.type === "phone") {
+      $("pPhone").classList.toggle("on", m.connected);
+      $("pPhone").lastElementChild.textContent = m.connected ? "핸드폰 연결됨" : "핸드폰 기다리는 중";
+    } else if (m.type === "state") {
+      state = m;
+      if (!m.shots.before) clearFrom("before");
+      else if (!m.shots.after) { setShot("after", null); res = committed = null; }
+      if (m.stage === "shoot" || m.stage === "ready") res = committed = null;      // 다시 찍음·처음부터 → 이전 결과 지움
+      $("pFacing").textContent = `카메라 ${m.facing || "–"}`;
+    } else if (m.type === "compare") { res = m; committed = null; }
+    else if (m.type === "commit") { committed = m; }
+    update();
+  }
+}
+connect();
+
+function changeRows(r) {
+  const row = (x, cls, sign) => `<li class="${cls}"><span class="sign">${sign}</span>${esc(x.name)} <b>${x.quantity}</b>`
+    + `<small>${esc((x.locations || []).map(locText).filter(Boolean).join(", "))}</small></li>`;
+  const rows = r.added.map(x => row(x, "add", "+")).concat(r.removed.map(x => row(x, "rem", "−")));
+  return rows.length ? `<ul class="rows">${rows.join("")}</ul>` : `<p class="note info">들어오거나 나간 식재료가 없습니다.</p>`;
+}
+
+function update() {
+  const st = { before: shots.before ? "✓ 저장됨" : state.live === "before" ? "📷 촬영 중" : "기다리는 중",
+               after: shots.after ? "✓ 저장됨" : state.live === "after" ? "📷 촬영 중 (전 사진 겹쳐 보기)" : "기다리는 중" };
+  for (const side of ["before", "after"]) {
+    const live = state.live === side && !shots[side];
+    $(side === "before" ? "hBefore" : "hAfter").classList.toggle("live", live);
+    const b = $(side === "before" ? "sBefore" : "sAfter"); b.textContent = st[side]; b.classList.toggle("on", live);
+    $(side === "before" ? "eBefore" : "eAfter").style.display = shots[side] || (live && liveFrame) ? "none" : "grid";
+  }
+  const stage = committed ? (committed.decision === "confirm" ? "✅ 재고 DB 에 반영했습니다" : committed.decision === "reject" ? "✖ 거절로 기록했습니다" : "💾 대기 상태로 저장")
+    : res ? `🔍 비교 결과 · ${(res.ms / 1000).toFixed(1)}초`
+    : shots.before && shots.after ? "② 까지 찍음 — 핸드폰에서 비교하기를 누르면 계산합니다"
+    : shots.before ? "② 후 사진 찍는 중" : "① 전 사진 찍는 중";
+  $("stage").textContent = stage;
+  $("stageSub").textContent = res && !committed ? "핸드폰에서 ✅ DB 에 반영 / ✖ 거절을 누르면 재고 DB 에 기록합니다."
+    : committed ? "핸드폰에서 📷 새로 찍기를 누르면 처음부터 다시 시작합니다." : "핸드폰 전/후 비교 화면의 진행 상황이 그대로 보입니다 (보기 전용).";
+
+  $("resultSec").style.display = res ? "block" : "none";
+  if (res) {
+    const u = unknownCount(res.after, MIN_CONF) + unknownCount(res.before, MIN_CONF);
+    $("result").innerHTML = changeRows(res)
+      + (u ? `<p class="note warn">❓ 모르는 물체 ${u}개 — 핸드폰에서 빨간 상자를 누르면 이름을 붙일 수 있습니다. 이름이 없는 물체는 DB 에 저장하지 않습니다.</p>` : "")
+      + (res.learned ? `<p class="note ok">기억함: ${esc(res.learned)}</p>` : "")
+      + (res.reasons?.length ? `<p class="note info">확인할 것: ${esc(res.reasons.join(" · "))}</p>` : "");
+  }
+  $("dbSec").style.display = committed ? "block" : "none";
+  if (committed) {
+    const c = committed;
+    const ev = c.events.length ? `<ul class="rows">${c.events.map(e => `<li class="${e.delta > 0 ? "add" : "rem"}"><span class="sign">${e.delta > 0 ? "+" : "−"}</span>`
+      + `${esc(e.name)} <b>${Math.abs(e.delta)}</b><small>${{ confirmed: "반영됨", rejected: "거절됨", pending: "확인 대기" }[e.status] || esc(e.status)}</small></li>`).join("")}</ul>`
+      : `<p class="note info">저장한 변경 없음 (촬영 기록만 저장)</p>`;
+    $("db").innerHTML = ev
+      + c.alerts.map(a => `<p class="note warn">⚠️ 확인 필요: ${esc(a.name)} ${a.delta} — DB 재고보다 많이 빼려고 해서 반영하지 않았습니다 (대기 상태).</p>`).join("")
+      + (c.waiting ? `<p class="note warn">📡 DB 저장 대기 중 ${c.waiting}건 — 연결되면 다시 보냅니다.</p>` : "")
+      + (c.stock ? `<p class="note info">현재 DB 재고: ${c.stock.length ? c.stock.map(s => `${esc(s.name)} ${s.qty}`).join(", ") : "없음"}</p>` : "");
+  }
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const liveOk = liveFrame && performance.now() - liveAt < 3000;
+  for (const side of ["before", "after"]) {
+    const cv = panes[side], W = cv.clientWidth, H = cv.clientHeight, ctx = cv.getContext("2d");
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+    if (shots[side]) {
+      const r = fitRect(shots[side].width, shots[side].height, W, H, "contain");
+      ctx.drawImage(shots[side], r.x, r.y, r.w, r.h);
+      if (res && res[side]) drawDetections(ctx, res[side], r, { minConf: MIN_CONF, hint: false });
+    } else if (state.live === side && liveOk) {
+      const r = fitRect(liveFrame.width, liveFrame.height, W, H, "contain");
+      ctx.drawImage(liveFrame, r.x, r.y, r.w, r.h);                       // PC 는 거울 없이 원본 방향
+      if (side === "after" && shots.before) { ctx.globalAlpha = GHOST; ctx.drawImage(shots.before, r.x, r.y, r.w, r.h); ctx.globalAlpha = 1; }
+    }
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+$("full").onclick = () => document.fullscreenElement ? document.exitFullscreen() : $("halves").requestFullscreen();
+$("shot").onclick = () => {          // 전·후 두 칸을 한 장으로 저장
+  const a = panes.before, b = panes.after, out = document.createElement("canvas");
+  out.width = Math.max(a.width, b.width); out.height = a.height + b.height;
+  const c = out.getContext("2d"); c.drawImage(a, 0, 0); c.drawImage(b, 0, a.height);
+  const link = document.createElement("a");
+  link.href = out.toDataURL("image/png");
+  link.download = `compare-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+  link.click();
+};
+
+fetch("/api/info").then(r => r.json()).then(info => {
+  $("pDb").classList.toggle("on", !!info.db);
+  $("pDb").lastElementChild.textContent = info.db ? "재고 DB 연결" : "DB 미설정";
+  const urls = info.compare_urls || [];
+  $("urls").innerHTML = urls.map(u => `<a href="${u}">${u}</a>`).join("");
+  if (urls[0] && window.QRCode) new QRCode($("qr"), { text: urls[0], width: 168, height: 168 });
+  else $("qr").style.display = "none";
+}).catch(() => {});
+update();
+</script>
+</body>
+</html>

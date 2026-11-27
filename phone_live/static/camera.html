@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0b0f14">
+  <title>카메라 — 실시간 인식</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body { overflow: hidden; touch-action: manipulation; }
+    #stage { position: fixed; inset: 0; background: #000; }
+    video, #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+    video { object-fit: cover; }
+    video.mirror { transform: scaleX(-1); }
+    #top { position: fixed; top: 0; left: 0; right: 0; padding: calc(env(safe-area-inset-top) + 10px) 12px 10px;
+      display: flex; flex-wrap: wrap; gap: 6px; background: linear-gradient(rgba(0,0,0,0.6), transparent); z-index: 5; }
+    #bottom { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 12px calc(env(safe-area-inset-bottom) + 14px);
+      background: linear-gradient(transparent, rgba(0,0,0,0.75)); z-index: 5; display: grid; gap: 10px; }
+    #controls { display: grid; gap: 10px; }
+    #controls .btns { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; }
+    #controls .btns button { padding: 12px 10px; }
+    #controls label.range input { flex: 1; width: auto; }
+    #analyze { display: none; padding: 14px 10px; font-size: 16px; font-weight: 700; }
+    body.paused #analyze { display: block; }
+    #analyze:disabled { opacity: 0.7; }
+    #resultHead { display: none; font-size: 13px; font-weight: 600; color: #fde68a; }
+    body.analyzed #resultHead { display: block; }
+    body.analyzed #list { max-height: 30vh; overflow-y: auto; }
+    #busy { position: fixed; inset: 0; display: none; place-content: center; z-index: 8; pointer-events: none; }
+    body.busy #busy { display: grid; }
+    #busy div { background: rgba(0,0,0,0.7); color: #fff; padding: 14px 20px; border-radius: 12px; font-weight: 600; }
+    .toast { bottom: auto; top: calc(env(safe-area-inset-top) + 120px); }  /* 아래 버튼·위 Unknown 안내를 가리지 않게 */
+    #unk { position: fixed; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 52px); z-index: 6; display: none;
+      background: rgba(239,68,68,0.92); color: #fff; border-radius: 12px; padding: 10px 12px; font-size: 14px; font-weight: 600;
+      line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,0.35); }
+    #unk.show { display: block; }
+    #unk small { display: block; font-weight: 500; opacity: 0.9; }
+    #start { position: fixed; inset: 0; display: grid; place-content: center; gap: 14px; text-align: center;
+      padding: 24px; background: var(--bg); z-index: 10; }
+    #start p { max-width: 340px; margin: 0 auto; line-height: 1.5; }
+    #err { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <video id="video" playsinline autoplay muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div id="top">
+    <span class="pill" id="pConn"><span class="led"></span><span>PC 연결 중…</span></span>
+    <span class="pill" id="pDet">인식 – ms</span>
+    <span class="pill" id="pFps">– 회/초</span>
+    <span class="pill" id="pView">PC 화면 0</span>
+  </div>
+
+  <div id="busy"><div>🔍 식재료 파악 중…</div></div>
+  <div id="unk"></div>
+
+  <div id="bottom">
+    <div id="resultHead"></div>
+    <ul class="items" id="list"><li class="muted">인식된 물체 없음</li></ul>
+    <div id="controls">
+      <button id="analyze" class="primary">🔍 식재료 파악하기</button>
+      <div class="btns">
+        <button id="pause">일시정지</button>
+        <button id="flip" class="primary">⟲ 카메라 전환</button>
+      </div>
+      <label class="range">신뢰도 <input id="conf" type="range" min="0.1" max="0.9" step="0.05" value="0.2"><span id="confV">20%</span></label>
+    </div>
+  </div>
+
+  <div id="start">
+    <h2 style="margin:0">📱 카메라 시작</h2>
+    <p class="muted">이 기기의 카메라 영상을 PC 로 보내 식재료를 인식합니다.<br>영상은 저장되지 않습니다.</p>
+    <button id="go" class="primary">카메라 켜기</button>
+    <p id="err"></p>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script src="/static/common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const video = $("video"), overlay = $("overlay"), octx = overlay.getContext("2d");
+const grab = document.createElement("canvas"), gctx = grab.getContext("2d");
+const SEND_MAX_W = 640;        // PC 로 보내는 프레임 최대 폭 (인식 모델 입력 640 과 같음)
+const SEND_FPS = 10;           // 초당 보내는 프레임 (PC 화면용). 인식은 PC 가 쉬는 대로
+let facing = "environment";    // 후면부터
+let stream = null, ws = null, result = null, paused = false, hits = [];
+let minConf = 0.2;
+
+// 모르는 물체(Unknown)가 있으면 위쪽에 안내 → 빨간 상자를 눌러 이름 입력
+function updateUnknownNotice() {
+  const n = unknownCount(result, minConf), el = $("unk");
+  el.classList.toggle("show", n > 0);
+  if (n > 0) el.innerHTML = `❓ 모르는 물체 ${n}개 — 빨간 상자를 눌러 이름을 알려 주세요`
+    + `<small>${paused ? "입력한 이름으로 기억하고 다시 파악합니다" : "일시정지 후 누르면 상자가 움직이지 않아 편해요"}</small>`;
+}
+
+function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("show"), 2200); }
+
+// ---------------- 카메라 ----------------
+async function openCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  const base = { width: { ideal: 1280 }, height: { ideal: 720 } };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...base, facingMode: { exact: facing } } });
+  } catch (e) {          // exact 를 못 쓰는 기기 → ideal 로 다시
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...base, facingMode: { ideal: facing } } });
+  }
+  video.srcObject = stream;
+  await video.play();
+  const s = stream.getVideoTracks()[0].getSettings();
+  if (s.facingMode) facing = s.facingMode;           // 실제로 열린 카메라
+  video.classList.toggle("mirror", facing === "user");
+  sendHello();
+}
+
+$("go").onclick = async () => {
+  $("err").textContent = "";
+  if (!navigator.mediaDevices?.getUserMedia) {
+    $("err").innerHTML = "이 브라우저에서 카메라를 열 수 없습니다.<br>주소가 <b>https://</b> 로 시작하는지 확인하세요.";
+    return;
+  }
+  try {
+    await openCamera();
+    $("start").style.display = "none";
+    connect();
+    keepAwake();
+  } catch (e) {
+    $("err").textContent = `카메라를 열지 못했습니다: ${e.name} — 브라우저 설정에서 카메라 권한을 허용해 주세요.`;
+  }
+};
+
+// 주소 옵션: ?auto=1 (버튼 없이 바로 시작), ?facing=user (전면부터)
+const qs = new URLSearchParams(location.search);
+if (qs.get("facing") === "user") facing = "user";
+if (qs.get("auto") === "1") $("go").click();
+
+$("flip").onclick = async () => {
+  const prev = facing;
+  facing = facing === "user" ? "environment" : "user";
+  try { await openCamera(); toast(facing === "user" ? "전면 카메라" : "후면 카메라"); }
+  catch (e) { facing = prev; await openCamera(); toast("다른 카메라를 열 수 없습니다"); }
+};
+
+$("pause").onclick = () => {
+  paused = !paused;
+  $("pause").textContent = paused ? "다시 시작" : "일시정지";
+  document.body.classList.toggle("paused", paused);
+  updateUnknownNotice();
+  if (paused) {
+    video.pause();
+  } else {                                   // 다시 시작: 정밀 분석 결과를 지우고 실시간 결과로
+    analysis = null;
+    document.body.classList.remove("analyzed");
+    video.play();
+  }
+};
+
+// ---------------- 식재료 파악하기 (일시정지 화면을 정밀 설정으로 한 번 더 인식) ----------------
+const ANALYZE_MAX_W = 1280;    // 정밀 분석용 사진 폭 (실시간 640 보다 크게: OCR·작은 물건)
+let analysis = null;
+
+function frameJpeg(maxW, quality) {
+  const s = Math.min(1, maxW / video.videoWidth);
+  grab.width = Math.round(video.videoWidth * s);
+  grab.height = Math.round(video.videoHeight * s);
+  gctx.drawImage(video, 0, 0, grab.width, grab.height);     // 거울 아님 (원본 그대로)
+  return new Promise(ok => grab.toBlob(ok, "image/jpeg", quality));
+}
+
+async function analyze() {
+  if (!paused || !video.videoWidth) return;
+  const btn = $("analyze");
+  btn.disabled = true; btn.textContent = "🔍 파악 중…";
+  document.body.classList.add("busy");
+  try {
+    const blob = await frameJpeg(ANALYZE_MAX_W, 0.9);
+    const r = await fetch("/api/analyze", { method: "POST", body: blob, headers: { "Content-Type": "image/jpeg" } });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || r.status);
+    if (!paused) return;                       // 기다리는 사이 다시 시작함
+    analysis = result = res;
+    document.body.classList.add("analyzed");
+    const rows = summarize(res, minConf);
+    const total = rows.reduce((a, x) => a + x.n, 0);
+    $("resultHead").textContent = `🔍 식재료 파악 결과 · ${rows.length}종 ${total}개 · ${(res.ms / 1000).toFixed(1)}초`;
+    renderList($("list"), res, minConf); updateUnknownNotice();
+    toast(rows.length ? rows.map(x => `${x.name} ${x.n}`).join(", ") : "인식된 식재료 없음");
+  } catch (e) {
+    toast(`식재료 파악 실패: ${e.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = "🔍 다시 파악하기";
+    document.body.classList.remove("busy");
+  }
+}
+$("analyze").onclick = analyze;
+
+$("conf").oninput = e => { minConf = +e.target.value; $("confV").textContent = Math.round(minConf * 100) + "%";
+  renderList($("list"), result, minConf); updateUnknownNotice(); };
+
+async function keepAwake() {        // 인식 중 화면 꺼짐 방지
+  try { const l = await navigator.wakeLock?.request("screen");
+        document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && keepAwake(), { once: true }); }
+  catch (e) {}
+}
+
+// ---------------- PC 연결 ----------------
+function setConn(on, text) {
+  $("pConn").classList.toggle("on", on);
+  $("pConn").lastElementChild.textContent = text;
+}
+function sendHello() {
+  if (ws?.readyState === 1)
+    ws.send(JSON.stringify({ type: "hello", facing: facing === "user" ? "전면" : "후면",
+                             ua: navigator.userAgent.slice(0, 80), w: video.videoWidth, h: video.videoHeight }));
+}
+function connect() {
+  ws = new WebSocket(wsUrl("/ws/camera"));
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { setConn(true, "PC 연결됨"); sendHello(); };
+  ws.onclose = () => { setConn(false, "끊김 — 다시 연결 중"); setTimeout(connect, 1500); };
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "dets") {
+      $("pDet").textContent = `인식 ${m.ms} ms`;
+      $("pFps").textContent = `${m.det_fps} 회/초`;
+      $("pView").textContent = `PC 화면 ${m.viewers}`;
+      if (paused) return;                      // 멈춘 화면은 실시간 결과로 덮지 않음
+      result = m;
+      renderList($("list"), result, minConf); updateUnknownNotice();
+    } else if (m.type === "toast") {
+      toast(m.text);
+      // 멈춘 화면에서 Unknown 에 이름을 붙였으면 바로 다시 파악 → 이름이 반영된 결과
+      if (paused && analysis && m.text.startsWith("기억함")) analyze();
+    }
+  };
+}
+
+// 프레임 보내기: PC 로 가는 길이 막히면(버퍼 쌓임) 건너뜀
+setInterval(() => {
+  if (paused || !ws || ws.readyState !== 1 || !video.videoWidth || ws.bufferedAmount > 300000) return;
+  frameJpeg(SEND_MAX_W, 0.7).then(b => b && !paused && ws.readyState === 1 && ws.send(b));
+}, 1000 / SEND_FPS);
+
+// ---------------- 상자 그리기 ----------------
+function draw() {
+  const dpr = window.devicePixelRatio || 1, W = overlay.clientWidth, H = overlay.clientHeight;
+  if (overlay.width !== Math.round(W * dpr) || overlay.height !== Math.round(H * dpr)) {
+    overlay.width = Math.round(W * dpr); overlay.height = Math.round(H * dpr);
+  }
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  octx.clearRect(0, 0, W, H);
+  if (result && video.videoWidth) {
+    const rect = fitRect(video.videoWidth, video.videoHeight, W, H, "cover");
+    hits = [];
+    drawDetections(octx, result, rect, { mirror: facing === "user", minConf, hit: hits });
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// Unknown 상자를 누르면 이름 입력 → PC 가 생김새를 기억 (fridge_vision 의 user_labels.json 과 같음)
+overlay.addEventListener("click", ev => {
+  const r = overlay.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+  const h = hits.filter(o => x >= o.X && x <= o.X + o.W && y >= o.Y && y <= o.Y + o.H && o.d.kind === "unknown");
+  if (!h.length || !result) return;
+  const name = prompt(h[0].d.hint ? `이 물체의 이름은? (포장 글씨: ${h[0].d.hint})` : "이 물체의 이름은? (예: 포도)",
+                      h[0].d.hint || "");
+  if (name && name.trim()) ws.send(JSON.stringify({ type: "label", name: name.trim(), box: h[0].d.box, seq: result.seq }));
+});
+</script>
+</body>
+</html>

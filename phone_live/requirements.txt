@@ -1,0 +1,4 @@
+aiohttp>=3.10
+cryptography>=42
+# 인식 모델·OpenCV 등은 ../fridge_vision/requirements.txt
+-r ../fridge_vision/requirements.txt
