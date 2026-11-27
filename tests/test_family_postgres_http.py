@@ -210,7 +210,7 @@ def test_migrations_fresh_upgrade_repeat_and_profile_cascade(start):
                                (aid, 'synthetic-preserved', 'synthetic-hash'))
                     db.execute("INSERT INTO account_households VALUES (%s,9001,'owner')", (aid,))
                     db.execute("INSERT INTO auth_sessions VALUES ('synthetic-session-hash',%s,9001,3600,0,NULL)", (aid,))
-                env = {**os.environ, 'PGOPTIONS': f'-c search_path={schema}'}
+                env = {**os.environ, 'KINI_DB_SCHEMA': schema}
                 first = subprocess.run([sys.executable, str(ROOT / 'scripts/run_migrations.py')],
                                        env=env, capture_output=True, text=True)
                 assert first.returncode == 0, 'migration failed in isolated schema'

@@ -224,7 +224,7 @@ def test_migration_005_preserves_existing_recommendation_meal_and_inventory():
                 before = stock_state(db)
                 stored = db.execute('SELECT result_json FROM recommendation_requests WHERE id=?',(saved['request_id'],)).fetchone()[0]
                 db.commit()
-                env = {**os.environ, 'PGOPTIONS': f'-c search_path={schema}'}
+                env = {**os.environ, 'KINI_DB_SCHEMA': schema}
                 applied = subprocess.run([sys.executable,str(root/'scripts/run_migrations.py')],env=env,capture_output=True,text=True)
                 assert applied.returncode == 0 and '005_cooking_sessions' in applied.stdout
                 repeated = subprocess.run([sys.executable,str(root/'scripts/run_migrations.py')],env=env,capture_output=True,text=True)

@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from app.services.postgres_repository import connect_postgres
+from app.services.postgres_repository import connect_postgres, database_schema
 
 
 def main():
@@ -16,7 +16,14 @@ def main():
     try:
         # Serialize explicit migration runners, independently of service writes.
         db.execute('SELECT pg_advisory_xact_lock(1263095369)')
+        schema = database_schema()
+        if db.execute('SELECT current_schema()').fetchone()[0] != schema:
+            raise RuntimeError('Create the target schema explicitly before running migrations')
         has_history = db.execute("SELECT to_regclass('schema_migrations') IS NOT NULL").fetchone()[0]
+        if not has_history and db.execute(
+            'SELECT 1 FROM information_schema.tables WHERE table_schema=? LIMIT 1', (schema,)
+        ).fetchone():
+            raise RuntimeError('Target schema is not empty and has no KINI migration history; refusing DDL')
         applied = {row[0] for row in db.execute('SELECT version FROM schema_migrations')} if has_history else set()
         completed = []
         for migration in migrations:

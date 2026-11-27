@@ -160,7 +160,7 @@ def test_007_upgrade_is_repeatable_and_preserves_stored_history():
                 item=db.execute('INSERT INTO meal_record_items(record_id,member_id,servings) VALUES (?,11,0.5)',(record,)).lastrowid
                 db.execute("INSERT INTO nutrition_intakes VALUES (?,'protein_g',5)",(item,)); db.commit()
                 before=stock_state(db); db.commit()
-                env={**os.environ,'PGOPTIONS':f'-c search_path={schema}'}
+                env={**os.environ,'KINI_DB_SCHEMA':schema}
                 for expected in ['007_meal_reporting_indexes','already up to date']:
                     result=subprocess.run([sys.executable,str(root/'scripts/run_migrations.py')],env=env,capture_output=True,text=True)
                     assert result.returncode==0 and expected in result.stdout
