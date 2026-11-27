@@ -30,6 +30,7 @@ RESOURCE_ROUTES = (
     ('POST', r'/api/households/[1-9][0-9]*/members'),
     ('GET', r'/api/meal-records/[1-9][0-9]*'),
     ('POST', r'/api/data/inventory/events/[1-9][0-9]*/confirm'),
+    ('POST', r'/api/data/inventory/events/[1-9][0-9]*/reject'),
     ('GET', r'/api/recommendations/[1-9][0-9]*'),
     ('GET', r'/api/cooking-sessions/[1-9][0-9]*'),
     ('POST', r'/api/cooking-sessions/[1-9][0-9]*/ingredients'),

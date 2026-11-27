@@ -46,6 +46,34 @@ function identity(path) {
   if (path === "/api/households/1") return response({id:1,members:[{id:3}]});
 }
 
+test('vision confirmation freezes a lost request, retries same payload, and clears on owner change', async () => {
+  let lost = true;
+  const {api,calls} = client(path => {
+    const auth = identity(path);
+    if (auth) return auth;
+    if (path.endsWith('/confirm')) {
+      if (lost) { lost = false; throw new Error('synthetic loss'); }
+      return response({status:'applied',event_id:7});
+    }
+    return response({});
+  });
+  await api.login('owner','synthetic-password',1);
+  const body = {ingredient_id:901,quantity_g:10,inventory_item_id:3};
+  await assert.rejects(api.confirmVision(7,body));
+  await assert.rejects(api.confirmVision(7,{...body,quantity_g:20}),/이전 확정/);
+  await assert.rejects(api.rejectVision(7),/결과를 먼저/);
+  assert.equal((await api.confirmVision(7,body)).status,'applied');
+  const writes = calls.filter(x => x.path.endsWith('/confirm'));
+  assert.equal(writes.length,2);
+  assert.deepEqual(writes[0].body,writes[1].body);
+  assert.equal(api.visionConfirmation(7),undefined);
+  lost = true;
+  await assert.rejects(api.confirmVision(8,body));
+  assert.ok(api.visionConfirmation(8));
+  await api.login('other-owner','synthetic-password',1);
+  assert.equal(api.visionConfirmation(8),undefined);
+});
+
 test("inventory normalization and all private calls attach the household bearer", async () => {
   const {api,calls}=client(path => identity(path) || response(path.includes("normalize")
     ? {ingredient:{ingredient_id:1},conversion:{quantity_g:25}}

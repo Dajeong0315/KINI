@@ -1,0 +1,8 @@
+{
+  "capture_id": "capture-20261127-142239-325",
+  "source": "yolo:yoloe-v8m-seg.pt",
+  "added": [{"item_id": "butter", "name": "버터", "quantity": 1, "locations": ["C,2"]}],
+  "removed": [],
+  "unknown": {"before": 2, "after": 2},
+  "latency_sec": 8.7
+}

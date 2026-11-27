@@ -14,7 +14,7 @@ ALLOWED={'.py','.json','.sql','.md','.txt','.service','.conf','.sh','.in','.js',
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--stage',choices=['step2','step3','step5','step6'],default='step2')
+    parser.add_argument('--stage',choices=['step2','step3','step5','step6','step7'],default='step2')
     args=parser.parse_args()
     files={}
     for directory in ('app','config','db','deploy','scripts'):
@@ -24,6 +24,10 @@ if __name__=='__main__':
             if path.name.startswith('.env') and path.name!='.env.example':
                 raise SystemExit('Refusing environment file')
             files[path.relative_to(ROOT).as_posix()]=path.read_bytes()
+    if args.stage == 'step7':
+        for filename in ('__init__.py','kini_inventory_client.py','kini_result_bridge.py'):
+            path = ROOT / 'fridge_vision' / filename
+            files[path.relative_to(ROOT).as_posix()] = path.read_bytes()
     hashes={name:hashlib.sha256(data).hexdigest() for name,data in sorted(files.items())}
     fingerprint=hashlib.sha256(json.dumps(hashes,sort_keys=True).encode()).hexdigest()
     release=args.stage+'-20261127-'+fingerprint[:12]

@@ -57,6 +57,27 @@ def test_bounded_authenticated_smoke_and_readiness(store):
     assert client.post('/api/voice/recommendations', headers=headers).status_code == 404
 
 
+def test_bounded_vision_pending_reject_and_foreign_household(store):
+    from uuid import uuid4
+    client = create_app().test_client()
+    headers = login(client)
+    event = client.post('/api/data/inventory/events', headers=headers, json={
+        'source': 'yolo', 'client_event_id': str(uuid4()), 'action': 'stock_in',
+        'detected_label': 'Unknown'})
+    assert event.status_code == 200 and event.json['requires_confirmation']
+    event_id = event.json['event_id']
+    snapshot = client.get('/api/data/inventory', headers=headers).json
+    assert snapshot['pending_events'] == [event.json]
+    assert client.post(f'/api/data/inventory/events/{event_id}/reject').status_code == 401
+    other = login(client, 'synthetic-b-other', 2)
+    assert client.get('/api/data/inventory', headers=other).json['pending_events'] == []
+    assert client.post(f'/api/data/inventory/events/{event_id}/reject', headers=other).status_code == 404
+    rejected = client.post(f'/api/data/inventory/events/{event_id}/reject', headers=headers)
+    assert rejected.status_code == 200 and rejected.json['status'] == 'rejected'
+    assert client.post(f'/api/data/inventory/events/{event_id}/reject', headers=headers).status_code == 200
+    assert client.get('/api/data/inventory', headers=headers).json['pending_events'] == []
+
+
 def test_household_and_object_boundaries(store):
     client = internal_app('synthetic-fake').test_client()
     headers = login(client)

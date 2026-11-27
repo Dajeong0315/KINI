@@ -175,7 +175,7 @@
       if ($("#scenario-dialog").open && !s.session) closeDialog();
     } finally {
       busy = false;
-      controls.forEach((n, i) => (n.disabled = disabled[i]));
+      controls.forEach((n, i) => (n.disabled = disabled[i] || n.dataset.requestLocked === 'true'));
       document.body.setAttribute("aria-busy", "false");
       render();
     }
@@ -812,6 +812,73 @@
     };
     openDialog("식재료 추가", form);
   }
+  function openVisionConfirmation(event, ingredient) {
+    const draft = api.visionConfirmation(event.event_id);
+    const incoming = event.action === 'stock_in';
+    const form = node('form');
+    const qty = field('실제 측정 중량 (g)', { type: 'number', min: 0.001, max: 1000000, step: 'any', value: draft?.quantity_g ?? '' });
+    const expiry = field('표시 소비기한 (선택)', { type: 'date', value: draft?.expiry_date || '' });
+    const lots = (s.inventory?.items || []).filter(x => x.ingredient_id === ingredient.ingredient_id && x.quantity_g > 0);
+    const lot = field('출고할 실제 재고', { value: draft?.inventory_item_id || '', options: [['', '재고 선택'], ...lots.map(x => [x.id, `#${x.id} · ${x.quantity_g}g · ${x.expiry_date || '기한 미기재'}`])] });
+    const check = checkbox('표준 재료·실제 중량과 입출고 방향을 확인했습니다');
+    const save = button('재고 확정', () => {}, 'primary');
+    save.disabled = false;
+    save.type = 'submit';
+    qty.input.required = check.input.required = true;
+    if (!incoming) lot.input.required = true;
+    form.append(note(`표준 재료: ${ingredient.canonical_name || ingredient.name || ingredient.ingredient_id} · ${incoming ? '입고' : '출고'} · 인식 후보 #${event.event_id}`),
+      note('인식 개수는 중량이 아닙니다. 실제 저울 중량을 입력하세요.'), qty.wrap, incoming ? expiry.wrap : lot.wrap, check.wrap, save);
+    const submit = async () => {
+      const body = { ingredient_id: ingredient.ingredient_id, quantity_g: Number(qty.input.value) };
+      if (incoming) body.expiry_date = expiry.input.value || null;
+      else body.inventory_item_id = Number(lot.input.value);
+      try {
+        await api.confirmVision(event.event_id, body);
+      } catch (error) {
+        if (api.visionConfirmation(event.event_id)) {
+          for (const input of [qty.input, expiry.input, lot.input]) input.dataset.requestLocked = 'true';
+          qty.input.disabled = expiry.input.disabled = lot.input.disabled = true;
+          save.textContent = '같은 내용으로 확정 재시도';
+        }
+        throw error;
+      }
+      closeDialog();
+      inventoryMessage = `인식 후보 #${event.event_id}의 ${incoming ? '입고' : '출고'}를 반영했습니다.`;
+      await api.inventory();
+    };
+    if (draft) qty.input.disabled = expiry.input.disabled = lot.input.disabled = true;
+    form.onsubmit = e => { e.preventDefault(); run(submit); };
+    openDialog('인식 재료와 중량 확인', form);
+  }
+  function reviewVision(event) {
+    const form = node('form'), name = field('확인한 표준 재료명');
+    const next = button('표준 재료 확인', () => {}, 'primary');
+    next.type = 'submit';
+    name.input.required = true;
+    form.append(note(`인식 후보: ${event.detected_label} · ${event.action === 'stock_in' ? '입고' : '출고'}`),
+      note('인식 이름은 후보입니다. 실제 재료를 확인해 표준 재료명을 입력하세요.'), name.wrap, next);
+    form.onsubmit = e => { e.preventDefault(); run(async () => {
+      const ingredient = await api.resolveVisionIngredient(name.input.value.trim());
+      openVisionConfirmation(event, ingredient);
+    }); };
+    openDialog('인식 후보 확인', form);
+  }
+  function pendingVision(root) {
+    const events = (s.inventory?.pending_events || []).filter(x => x.source === 'yolo');
+    const card = panel(root, '인식 확인 대기');
+    card.append(note('재료와 실제 g를 확인하기 전에는 재고에 반영되지 않습니다. 잘못 인식한 후보는 거절하세요.'));
+    if (!events.length) card.append(note('확인 대기 중인 인식 후보가 없습니다.'));
+    for (const event of events) {
+      const row = node('div', undefined, 'button-row');
+      row.append(node('span', `#${event.event_id} ${event.detected_label} · ${event.action === 'stock_in' ? '입고' : '출고'}`),
+        button('재료·중량 확인', () => reviewVision(event)),
+        button('인식 거절', () => run(async () => { await api.rejectVision(event.event_id); await api.inventory(); })));
+      for (const control of row.querySelectorAll('button')) control.disabled = busy || active() || s.session.role === 'viewer';
+      card.append(row);
+    }
+    if (s.inventory?.pending_vision_count > events.length)
+      card.append(note('대기 중인 항목이 더 있습니다. 앞선 항목을 처리한 뒤 새로고침해 주세요.'));
+  }
   function stockRows(root) {
     root.replaceChildren();
     const state = inventoryState();
@@ -931,6 +998,7 @@
     tools.append(node("summary", "기타 식재료 도구"), button("재고에 대해 질문", showStockQuestion));
     actions.append(tools);
     card.append(actions);
+    if (s.inventoryStatus === 'ready') pendingVision(root);
   }
   function showNutrition(name) {
     run(async () => {

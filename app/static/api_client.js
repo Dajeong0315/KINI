@@ -36,6 +36,7 @@
     let token = null;
     let submittedMeal = null;
     let incoming = null;
+    const visionConfirmations = new Map(), visionBusy = new Set();
     let sessionEpoch = 0, reportEpoch = 0, owner = null, saving = false;
     function eventKey() {
       const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
@@ -160,6 +161,8 @@
         state.cooking = null;
         state.outflows = null;
         incoming = null;
+        visionConfirmations.clear();
+        visionBusy.clear();
         submittedMeal = null;
         state.history = state.nutritionReport = state.recordDetail = state.data = null;
         state.reportsStatus = "idle";
@@ -540,6 +543,37 @@
       prepareOutflows,
       confirmOutflows,
       inventory,
+      async resolveVisionIngredient(name) {
+        const normalized = await request('/api/inventory/normalize', { name, quantity: 1, unit: 'g' }, true);
+        if (!normalized.ingredient?.ingredient_id || normalized.ingredient.match_status !== 'matched')
+          throw new APIError('등록된 표준 재료를 선택해 주세요. Unknown은 자동 등록하지 않습니다.');
+        return normalized.ingredient;
+      },
+      visionConfirmation(eventId) { return visionConfirmations.get(eventId); },
+      async confirmVision(eventId, body) {
+        if (visionBusy.has(eventId)) throw new APIError('확정 처리 중입니다.', 409);
+        const previous = visionConfirmations.get(eventId);
+        if (previous && JSON.stringify(previous) !== JSON.stringify(body))
+          throw new APIError('이전 확정 응답을 확인 중입니다. 같은 내용으로 재시도하거나 재고를 새로고침해 주세요.', 409);
+        visionConfirmations.set(eventId, { ...body });
+        visionBusy.add(eventId);
+        try {
+          const result = await request(`/api/data/inventory/events/${eventId}/confirm`, body, true);
+          visionConfirmations.delete(eventId);
+          invalidate();
+          state.inventory = null;
+          state.inventoryStatus = 'idle';
+          return result;
+        } catch (error) {
+          if ([400, 403, 404, 409, 422].includes(error.status)) visionConfirmations.delete(eventId);
+          throw error;
+        } finally { visionBusy.delete(eventId); }
+      },
+      async rejectVision(eventId) {
+        if (visionBusy.has(eventId) || visionConfirmations.has(eventId))
+          throw new APIError('확정 요청의 결과를 먼저 재조회해 주세요.', 409);
+        return request(`/api/data/inventory/events/${eventId}/reject`, {}, true);
+      },
       loadReports,
       mealDetail,
       feedback(recordId, memberId) {
