@@ -19,7 +19,13 @@
 - 휴대폰 commit 거부 API와 기존 390px Chrome Vision 화면: **2 passed / 11.00초**. commit 시험은 합성 요청이며 실제 휴대폰 카메라나 인식 정확도 시험이 아니다. Node API 클라이언트 **14 passed**, 휴대폰 HTML inline JS 구문 확인 통과.
 - 모델은 병합 중인 최신 코드로 저장소 실제 샘플 1쌍을 비교했다. YOLOE-v8m + CLIP ViT-B/16 + DINOv2 gallery/OpenVINO GPU, Intel i7-10700/UHD630, Python 3.12. 버터 1개 출고, 추가 없음, Unknown 전·후 2개, comparer 구간 **4.91초**. 모델 로딩은 구간에서 제외했다. 이전 검증 worktree의 공개 가중치·컴파일 캐시를 재사용하고 갤러리·상태는 새 임시 디렉터리를 사용했다. 냉장고 전체 정확도·최대 메모리·실기기 지연 측정으로 확대하지 않는다.
 - 모델 환경은 기존 별도 Vision venv를 사용했다. 휴대폰 선택 의존성 aiohttp 3.14.5를 이 환경에만 추가했고 cryptography 50.0.2를 확인했다. 원래 프로젝트 venv와 서버 의존성은 변경하지 않았다. 운영 DB 직접 동기화·OpenAI 호출은 실행하지 않았으며 실제 OpenAI 호출은 0회다.
-- 전체 저장소 회귀 시험 결과와 최종 Git 반영 상태는 종료 후 아래에 기록한다.
+- 별도 추가 시험: 파괴적인 원격 DB CLI 시험 차단 **1 passed / 0.50초**. 카메라를 사용하지 않는 합성 전후 프레임을 넣어 휴대폰 기본 화면에 직접 반영/거절 버튼이 없고 재촬영으로 초기화되는 Chrome 시험 **1 passed / 2.78초**.
+- 전체 저장소 회귀: `pytest tests` **452 passed, 264 skipped / 537.19초**. 운영 HTTPS opt-in 시험 3개는 명령에서 명시적으로 제외했다. PostgreSQL 명시 설정·선택 의존성/외부 실행 조건이 필요한 시험은 건너뛰었으며 실패 0개다. Vision 폴더는 자체 conftest가 루트 수집에서 제외하므로 위의 독립 89개 결과와 구분한다. 새 Chrome 단독 시험은 전체 수집 이후 추가돼 별도로 실행했다. 이번 통합 후 운영 환경 전체를 다시 시험했다는 뜻이 아니다.
+- Python compileall, 휴대폰 inline JavaScript 구문, Git 충돌 마커·공백 검사와 변경 파일의 민감 키 패턴 검사를 통과했다. 가중치·캡처·인증서·DB·개인 갤러리가 Git 추적 대상에 없는 것을 확인했다.
+
+## Git 통합
+
+최신 Vision과 이전 연동 검증은 각각 merge commit으로 통합해 두 원격 브랜치의 기존 커밋을 보존했다. [통합 PR #41](https://github.com/Dajeong0315/KINI/pull/41)은 전체 회귀 완료 후 main에 병합하며, 원격 source tip이 main의 조상임을 재확인한 후 완료 브랜치를 정리한다. 원래 작업 공간의 미커밋 변경·기존 로컬 보관 태그·모델 검증 worktree는 보존한다.
 
 ## 적용 경계
 
