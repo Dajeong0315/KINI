@@ -9,6 +9,7 @@
 실행:  python -m pytest tests/test_supabase_sync.py -q   (pgserver·supabase 가 없으면 통합 시험은 건너뜀)
 """
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -23,6 +24,18 @@ import config  # noqa: E402
 import supabase_sync as ss  # noqa: E402
 
 SERVICE_KEY, ANON_KEY = "service-key", "anon-key"
+
+
+def test_destructive_cli_refuses_remote_database_before_any_request(monkeypatch):
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import check_supabase as cs
+    monkeypatch.setattr(config, 'SUPABASE_URL', 'https://example.supabase.co')
+    monkeypatch.setenv('VISION_DISPOSABLE_TEST_DB', '1')
+    monkeypatch.setattr(sys, 'argv', ['check_supabase.py', '--write', '--yes'])
+    def forbidden(*args, **kwargs):
+        raise AssertionError('No production request allowed')
+    monkeypatch.setattr(cs, 'make_reader', forbidden)
+    assert cs.main() == 2
 
 
 # ---------------------------------------------------------------------------
@@ -164,11 +177,23 @@ class MiniPostgrest(BaseHTTPRequestHandler):
 
 
 def start_db_and_api():
-    import pgserver
     import psycopg
     tmp = Path(tempfile.mkdtemp(prefix="fridge_pg_"))
-    srv = pgserver.get_server(tmp / "pgdata", cleanup_mode="delete")
+    uri = os.getenv('VISION_TEST_DATABASE_URL')
+    if uri:
+        from psycopg.conninfo import conninfo_to_dict
+        info = conninfo_to_dict(uri)
+        assert info.get('host') in ('127.0.0.1', 'localhost', '::1')
+        assert info.get('dbname') == 'kini_vision_test'
+        class ExternalDisposable:
+            def get_uri(self): return uri
+            def cleanup(self): pass  # Docker owner removes the disposable server.
+        srv = ExternalDisposable()
+    else:
+        import pgserver
+        srv = pgserver.get_server(tmp / "pgdata", cleanup_mode="delete")
     conn = psycopg.connect(srv.get_uri(), autocommit=True)
+    assert conn.execute("select to_regclass('public.current_stock')").fetchone()[0] is None, 'Use a NEW disposable database'
     # Supabase 와 같은 역할 (service_role 은 RLS 우회)
     for stmt in ("create role anon nologin", "create role authenticated nologin",
                  "create role service_role nologin bypassrls"):
@@ -193,7 +218,8 @@ def stock(conn):
 
 def test_integration():
     try:
-        import pgserver  # noqa: F401
+        if not os.getenv('VISION_TEST_DATABASE_URL'):
+            import pgserver  # noqa: F401
         import psycopg  # noqa: F401
         import supabase  # noqa: F401
     except ImportError:

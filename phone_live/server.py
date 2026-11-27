@@ -160,7 +160,7 @@ class Detector:
         if decision not in ("confirm", "reject"):
             raise ValueError("decision 은 confirm 또는 reject")
         if self.sync is None or not self.sync.enabled:
-            raise ValueError("Supabase 미설정 — fridge_vision/.env 의 SUPABASE_URL·SUPABASE_SECRET_KEY 를 확인하세요")
+            raise ValueError("별도 개수 재고 반영은 비활성입니다. KINI에서는 후보를 접수하고 앱에서 표준 재료·실제 g를 확인하세요.")
         result = s["result"]
         self.sync.record(result).result()                # 기다림 (전송은 supabase_sync 의 스레드에서)
         fut = self.sync.decide(result, decision)         # SUPABASE_CONFIRM_MODE=ipad 이면 None (pending 으로만 저장)

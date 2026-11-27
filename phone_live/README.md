@@ -1,3 +1,10 @@
+# KINI 통합 기본값
+
+현재 main에서 별도 공개 Supabase 개수 재고 쓰기는 기본 비활성입니다. `phone_live`는 실제 comparer와 전·후 사진·결과 파일을 재사용하는 촬영 도구입니다. KINI g 재고는 저장된 `fridge_vision/captures/<capture_id>/result.json`을 루트 `scripts/vision_kini_bridge.py`로 후보 접수한 뒤 KINI 앱에서 실제 재료·g·lot을 확인해야 바뀝니다. 이 화면의 ‘DB에 반영’을 KINI 재고 확정 버튼으로 사용하지 마세요.
+
+아래 구형 개수 재고 동기화 설명은 전용 DB에서 `VISION_ALLOW_LEGACY_SUPABASE_WRITE=1`을 명시한 경우에만 해당합니다. KINI API URL과 동시에 활성화되지 않습니다. 설치·촬영 방법은 재사용하되 기본 KINI 연결은 7단계 구현검증 문서를 따릅니다.
+
+
 # 핸드폰 카메라 실시간 식재료 인식 (phone_live)
 
 핸드폰 카메라 영상을 PC 로 보내 **`fridge_vision` 과 똑같은 인식 방식**(원본 YOLOE-v8m + CLIP 재확인 + 포장 식품 OCR, Unknown 처리)으로 실시간 인식하고,
@@ -158,9 +165,3 @@ PC 브라우저에서 `https://localhost:8443/compare-view` (첫 화면의 **�
 - 사용자 이름표의 "같은 자리" 기준(상자 위치)은 고정 카메라용입니다. 손에 든 핸드폰은 계속 움직이므로 생김새 유사도 0.95 이상일 때만 자동 적용되고, 다시 물어볼 수 있습니다.
 - 영상·사진은 저장하지 않습니다. 단 Unknown 에 이름을 붙이면 그 물체의 생김새 특징값이 `fridge_vision/user_labels.json` 에 저장됩니다.
 - 인증서는 시험용입니다. 공용 네트워크에서는 쓰지 마세요.
-# KINI 통합 기본값
-
-현재 main에서 별도 공개 Supabase 개수 재고 쓰기는 기본 비활성입니다. `phone_live`는 실제 comparer와 전·후 사진·결과 파일을 재사용하는 촬영 도구입니다. KINI g 재고는 저장된 `fridge_vision/captures/<capture_id>/result.json`을 루트 `scripts/vision_kini_bridge.py`로 후보 접수한 뒤 KINI 앱에서 실제 재료·g·lot을 확인해야 바뀝니다. 이 화면의 ‘DB에 반영’을 KINI 재고 확정 버튼으로 사용하지 마세요.
-
-아래 구형 개수 재고 동기화 설명은 전용 DB에서 `VISION_ALLOW_LEGACY_SUPABASE_WRITE=1`을 명시한 경우에만 해당합니다. KINI API URL과 동시에 활성화되지 않습니다. 설치·촬영 방법은 재사용하되 기본 KINI 연결은 7단계 구현검증 문서를 따릅니다.
-

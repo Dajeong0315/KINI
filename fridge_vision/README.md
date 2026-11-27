@@ -1,3 +1,14 @@
+# KINI main 통합 시 재고 연결 경계
+
+KINI의 기준 재고는 `kini_private`의 g 단위 lot이며 인식 결과만으로 바뀌지 않습니다. 기본 실행에서는 별도 공개 Supabase 개수 재고에 쓰지 않습니다. 키만 설정해도 자동으로 활성화되지 않습니다.
+
+`tools/check_supabase.py --write`의 reset 시험은 운영 Supabase에서 실행할 수 없습니다. 별도 loopback 시험 DB와 `VISION_DISPOSABLE_TEST_DB=1`에서만 허용됩니다. `--yes`도 이 제한을 우회하지 않습니다.
+
+KINI에서는 `--engine yolo --no-sync`로 결과를 저장하고 루트의 `scripts/vision_kini_bridge.py`로 후보를 보낸 뒤 앱에서 표준 재료·실제 g·출고 lot을 확인합니다. 원격 서버는 기존 SSH loopback 터널을 사용합니다. 자세한 절차는 `docs/7단계_Vision_연결_구현검증_2026-11-27.md`를 따릅니다.
+
+아래 기존 문서의 `supabase_sync`·`current_stock`·자동 반영은 **별도 개수 재고용 기능**입니다. 이 경로는 `VISION_ALLOW_LEGACY_SUPABASE_WRITE=1`을 명시하고 KINI API URL이 없는 경우에만 활성화됩니다. KINI 통합의 기본 경로가 아닙니다. `phone_live`의 ‘DB에 반영’도 g 확인을 대신하지 않습니다. 실제 OpenAI 호출과 사진 외부 전송은 이번 통합에서 사용하지 않았습니다.
+
+
 # Vision AI 냉장고 — YOLO 기반 식재료 인식 모듈 (KINI)
 
 냉장고 안 카메라 영상만으로 **문 닫힘 감지 → 내부 촬영 → 이전·현재 사진에서 식재료 인식 → 추가·제거 계산 → Supabase 고내 재고 테이블 갱신**까지 처리합니다.
@@ -546,11 +557,3 @@ YOLOE 상자를 잘라 다시 분류하는 2단계 인식을 시험했습니다.
 - `food_item` 의 보관 일수(`shelf_days`)는 임시값입니다 (DB 설계 설명 10장).
 - OpenAI 엔진은 요청 형식까지만 검증했습니다 (크레딧 없음).
 - iPad 확인 화면·옆 모니터 연동(Socket.IO)은 아직 없습니다. 지금은 `y`/`n` 키가 iPad 확인 버튼 역할을 합니다.
-# KINI main 통합 시 재고 연결 경계
-
-KINI의 기준 재고는 `kini_private`의 g 단위 lot이며 인식 결과만으로 바뀌지 않습니다. 기본 실행에서는 별도 공개 Supabase 개수 재고에 쓰지 않습니다. 키만 설정해도 자동으로 활성화되지 않습니다.
-
-KINI에서는 `--engine yolo --no-sync`로 결과를 저장하고 루트의 `scripts/vision_kini_bridge.py`로 후보를 보낸 뒤 앱에서 표준 재료·실제 g·출고 lot을 확인합니다. 원격 서버는 기존 SSH loopback 터널을 사용합니다. 자세한 절차는 `docs/7단계_Vision_연결_구현검증_2026-11-27.md`를 따릅니다.
-
-아래 기존 문서의 `supabase_sync`·`current_stock`·자동 반영은 **별도 개수 재고용 기능**입니다. 이 경로는 `VISION_ALLOW_LEGACY_SUPABASE_WRITE=1`을 명시하고 KINI API URL이 없는 경우에만 활성화됩니다. KINI 통합의 기본 경로가 아닙니다. `phone_live`의 ‘DB에 반영’도 g 확인을 대신하지 않습니다. 실제 OpenAI 호출과 사진 외부 전송은 이번 통합에서 사용하지 않았습니다.
-

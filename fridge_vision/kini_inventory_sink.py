@@ -25,7 +25,6 @@ import os
 import threading
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse
 try:
     from .kini_inventory_client import _local_origin
 except ImportError:  # main.py runs with fridge_vision as the module search root
@@ -33,7 +32,6 @@ except ImportError:  # main.py runs with fridge_vision as the module search root
 
 # 이 네임스페이스는 바꾸지 말 것 (바꾸면 재전송 시 다른 ID 가 되어 중복 이벤트가 생김)
 EVENT_NAMESPACE = uuid.UUID("6f1c7f0e-3a51-4d4e-9b1e-0b6a4b1f7c21")
-LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 class KiniApiError(RuntimeError):

@@ -333,6 +333,23 @@ def test_real_client_construction_keeps_keys_out_of_repr():
     assert SECRET not in repr(sc.Clients(reader=r, writer=w))
 
 
+def test_credentials_alone_never_enable_legacy_public_inventory(monkeypatch):
+    monkeypatch.setattr(config, 'SUPABASE_URL', 'https://example.supabase.co')
+    monkeypatch.setattr(config, 'SUPABASE_SECRET_KEY', SECRET)
+    monkeypatch.setattr(config, 'VISION_ALLOW_LEGACY_SUPABASE_WRITE', False)
+    assert not sc.configured_for_write()
+    sync = ss.InventorySync(log=lambda message: None)
+    assert not sync.enabled
+    monkeypatch.setattr(config, 'VISION_ALLOW_LEGACY_SUPABASE_WRITE', True)
+    monkeypatch.delenv('KINI_API_URL', raising=False)
+    monkeypatch.delenv('KINI_A_API_URL', raising=False)
+    assert sc.configured_for_write()
+    for name in ('KINI_API_URL', 'KINI_A_API_URL'):
+        monkeypatch.setenv(name, 'http://127.0.0.1:5101')
+        assert not sc.configured_for_write()
+        monkeypatch.delenv(name)
+
+
 # ---------------------------------------------------------------------------
 # 4. InventorySync: 연결 실패 → 대기열 → 재전송, 확인 필요 알림
 # ---------------------------------------------------------------------------
@@ -426,7 +443,7 @@ def test_sync_disabled_without_keys(monkeypatch):
     logs = []
     s = ss.InventorySync(log=logs.append)
     assert not s.enabled and s.record(result("c1")) is None and s.outbox_count() == 0
-    assert "미설정" in logs[0]
+    assert "비활성" in logs[0]
 
 
 # ---------------------------------------------------------------------------

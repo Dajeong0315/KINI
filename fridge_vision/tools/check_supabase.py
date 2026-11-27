@@ -13,7 +13,9 @@
   → 닭고기 −3 → stock mismatch 처리 확인 → reset_demo 로 원상복구
 """
 import argparse
+import os
 import sys
+from urllib.parse import urlsplit
 from datetime import datetime
 from pathlib import Path
 
@@ -152,6 +154,10 @@ def main() -> int:
     p.add_argument("--write", action="store_true", help="쓰기 점검 (실제 DB 데이터를 바꿈)")
     p.add_argument("--yes", action="store_true", help="쓰기 점검 확인 질문 건너뛰기")
     args = p.parse_args()
+    if args.write and (os.getenv('VISION_DISPOSABLE_TEST_DB') != '1'
+                       or urlsplit(config.SUPABASE_URL).hostname not in ('localhost', '127.0.0.1', '::1')):
+        print('파괴적인 재고 시험은 별도 loopback 시험 DB와 VISION_DISPOSABLE_TEST_DB=1에서만 허용합니다. 운영 Supabase에서는 실행할 수 없습니다.')
+        return 2
     print(f"Supabase 점검 — URL {'설정됨' if config.SUPABASE_URL else '없음'}, "
           f"Publishable 키 {'설정됨' if config.SUPABASE_PUBLISHABLE_KEY else '없음'}, "
           f"Secret 키 {'설정됨' if config.SUPABASE_SECRET_KEY else '없음'} (값은 출력하지 않음)")
