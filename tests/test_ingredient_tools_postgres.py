@@ -162,7 +162,7 @@ def test_008_upgrade_preserves_unverified_legacy_rows():
                 db.execute("INSERT INTO ingredient_aliases(ingredient_id,alias,normalized_alias) VALUES (901,'legacy alias','legacy alias')")
                 db.execute("INSERT INTO unit_conversions(ingredient_id,unit,grams) VALUES (901,'개',120)"); db.commit()
                 before=stock_state(db); db.commit()
-                env={**os.environ,'PGOPTIONS':f'-c search_path={schema}'}
+                env={**os.environ,'KINI_DB_SCHEMA':schema}
                 for expected in ['008_ingredient_normalization','already up to date']:
                     result=subprocess.run([sys.executable,str(root/'scripts/run_migrations.py')],env=env,capture_output=True,text=True)
                     assert result.returncode==0 and expected in result.stdout

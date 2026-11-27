@@ -101,6 +101,16 @@ class PostgresCursor:
         return self._cursor.rowcount
 
 
+def database_schema():
+    """One explicit schema; never fall through to a different public catalog."""
+    schema = os.getenv("KINI_DB_SCHEMA", "public")
+    if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", schema):
+        raise RuntimeError("KINI_DB_SCHEMA must be a lowercase PostgreSQL identifier")
+    if schema.startswith("pg_") or schema in {"auth", "storage", "vault", "information_schema", "supabase_migrations"}:
+        raise RuntimeError("KINI_DB_SCHEMA cannot be a system or Supabase managed schema")
+    return schema
+
+
 def connect_postgres():
     try:
         import psycopg
@@ -109,7 +119,15 @@ def connect_postgres():
     url = os.getenv("KINI_DATABASE_URL") or os.getenv("DATABASE_URL")
     if not url:
         raise RuntimeError("KINI_DATABASE_URL is required for PostgreSQL backend")
-    return PostgresConnection(psycopg.connect(url, row_factory=hybrid_row))
+    schema = database_schema()
+    timeout = int(os.getenv("KINI_DB_CONNECT_TIMEOUT", "5"))
+    if not 1 <= timeout <= 60:
+        raise RuntimeError("KINI_DB_CONNECT_TIMEOUT must be between 1 and 60 seconds")
+    # Session pooler/direct connections only. No public fallback or implicit DDL.
+    return PostgresConnection(psycopg.connect(
+        url, row_factory=hybrid_row, connect_timeout=timeout,
+        options=f"-c search_path={schema},pg_catalog -c statement_timeout=15000",
+    ))
 
 
 @contextmanager

@@ -281,7 +281,7 @@ def test_migration_006_preserves_existing_drafts_inventory_and_intakes():
                 tables = ['meal_records','meal_record_items','nutrition_intakes','cooking_sessions','inventory_items']
                 before = {table:[dict(row) for row in db.execute(f'SELECT * FROM {table}')] for table in tables}
                 db.commit()
-                env = {**os.environ,'PGOPTIONS':f'-c search_path={schema}'}
+                env = {**os.environ,'KINI_DB_SCHEMA':schema}
                 first = subprocess.run([sys.executable,str(root/'scripts/run_migrations.py')],env=env,capture_output=True,text=True)
                 assert first.returncode == 0 and '006_cooking_completion' in first.stdout
                 again = subprocess.run([sys.executable,str(root/'scripts/run_migrations.py')],env=env,capture_output=True,text=True)
