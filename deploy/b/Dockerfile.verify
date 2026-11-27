@@ -1,0 +1,6 @@
+FROM python:3.12-slim
+WORKDIR /srv/kini
+COPY deploy/b/requirements.in /tmp/requirements.in
+RUN pip install --no-cache-dir -r /tmp/requirements.in pytest==8.4.2
+COPY . .
+CMD ["python", "-m", "pytest", "tests/test_b_runtime.py", "tests/test_ai_privacy_chain.py", "-q"]

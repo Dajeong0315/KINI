@@ -25,9 +25,13 @@ class NutritionRecord:
     source: str
     release_id: str | None = None
     cache_status: str | None = None
+    external_id: str | None = None
 
 
 def catalog_context(db):
+    catalog = service()
+    if hasattr(catalog, 'context'):
+        return [catalog.context(db), catalog.mapping_revision(db)]
     row = db.execute("""SELECT a.release_id,a.cache_version,s.rights_status,r.status
         FROM active_data_releases a JOIN catalog_data_sources s ON s.code=a.source_code
         JOIN data_releases r ON r.id=a.release_id WHERE a.source_code='mfds_nutrition'""").fetchone()
@@ -51,7 +55,8 @@ class RecommendationNutritionProvider:
         Legacy rows are permitted solely as demo/official fallback and retain
         their source label for the response provenance.
         """
-        pointer = db.execute('''SELECT l.release_id,l.food_id
+        cloud = hasattr(self.catalog, 'ingredient_link')
+        pointer = self.catalog.ingredient_link(db, ingredient_id) if cloud else db.execute('''SELECT l.release_id,l.food_id
             FROM catalog_ingredient_links l
             JOIN active_data_releases a ON a.source_code='mfds_nutrition'
                 AND a.release_id=l.release_id
@@ -61,17 +66,21 @@ class RecommendationNutritionProvider:
         if pointer:
             try:
                 result = self.catalog.read(db, 'mfds_nutrition', 'food', pointer['food_id'])
-                if result.item['basis_unit'] != 'g' or result.item['release_id'] != pointer['release_id']:
+                if (result.item['basis_unit'] != 'g' or result.item['release_id'] != str(pointer['release_id'])
+                    or (cloud and result.item['name'] != pointer['expected_name'])):
                     return None
                 values = {n: result.item['nutrients'].get(n) for n in NUTRIENTS}
                 if all(_valid_number(v) for v in values.values()) and _valid_number(result.item['basis_amount'], positive=True):
                     values['basis_amount_g'] = result.item['basis_amount']
-                    return NutritionRecord(values, 'catalog_published', result.item['release_id'], result.cache_status)
+                    return NutritionRecord(values, 'catalog_published', result.item['release_id'], result.cache_status,
+                                           result.item['external_id'])
                 return None
             except (PublicRecordMissing, CacheUnavailable, ValueError, KeyError, TypeError):
                 return None
 
-        if legacy_row is None:
+        # Explicit cloud mode must not quietly return demo nutrition if mapping,
+        # release, or source validation is missing.
+        if cloud or legacy_row is None:
             return None
         values = {n: legacy_row[n] for n in NUTRIENTS}
         if not all(_valid_number(v) for v in values.values()) or not _valid_number(legacy_row['basis_amount_g'], positive=True):

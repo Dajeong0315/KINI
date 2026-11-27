@@ -9,6 +9,7 @@ from .freshness import assess_inventory
 from .recommendation_llm import PROMPT_VERSION
 from .data_quality import inspect_ingredient
 from .recommendation_provider import RecommendationNutritionProvider, per_serving_nutrition, catalog_context
+from .meal_feedback_personalization import current_facts, recipe_effect, POLICY_VERSION as FEEDBACK_POLICY
 
 RULES_VERSION='1.3-data-quality'
 NUTRIENTS=('energy_kcal','protein_g','carbohydrate_g','fat_g','sodium_mg')
@@ -28,6 +29,7 @@ def recommend(db, req, *, persist=True):
     inventory=[dict(r) for r in db.execute('SELECT inventory_items.*, ingredients.name FROM inventory_items JOIN ingredients ON ingredients.id=ingredient_id WHERE household_id=? ORDER BY inventory_items.id',(req['household_id'],))]
     today=date.today().isoformat()
     aggregate(db, req['household_id'])
+    feedback_facts = current_facts(db, req['household_id'], ids)
     remaining={}
     for p in people:
         consumed={r['nutrient']:r['total'] for r in db.execute('SELECT nutrient,SUM(amount) total FROM nutrition_intakes JOIN meal_record_items ON meal_record_items.id=record_item_id JOIN meal_records ON meal_records.id=record_id WHERE member_id=? AND substr(eaten_at,1,10)=? GROUP BY nutrient',(p['id'],today))}
@@ -64,6 +66,8 @@ def recommend(db, req, *, persist=True):
             urgency+=priority*min(needed/available,1) if available else 0
             usage.append({'ingredient':name,'needed_g':round(needed,2),'available_g':available,'priority':priority,
                           'nutrition_source': quality.get('nutrition_source') if quality else None,
+                          'nutrition_release_id': quality.get('nutrition_release_id') if quality else None,
+                          'nutrition_food_id': quality.get('nutrition_food_id') if quality else None,
                           'uncertainty_flags':sorted({flag for _,assessment in assessed for flag in assessment['flags']})})
             if name in req.get('excluded_ingredients',[]): reasons.append(f'{name}: 사용자 제외'); reason_codes.append('user_exclusion')
             for p in people:
@@ -91,18 +95,29 @@ def recommend(db, req, *, persist=True):
         balance=protein; primary=protein; secondary=protein; feasibility=max(0,100-missing/10)
         score=round(sum(a*b for a,b in zip(weights,(inv,balance,primary,secondary,pref,feasibility,variety))),4)
         personal_score, applied, ignored = score_personalization(db, req['household_id'], people, recipe, ingredients, today)
+        feedback_score, feedback_evidence, cooking_guidance = recipe_effect(feedback_facts, recipe['id'])
+        if feedback_evidence:
+            previous_personal_score = personal_score
+            personal_score = round(max(-15, min(15, personal_score + feedback_score)), 4)
+            applied.append({'feature_type':'recipe','feature_value':str(recipe['id']),
+                            'inference':'meal_taste','adjustment':round(personal_score-previous_personal_score,4),
+                            'raw_adjustment':feedback_score,'evidence':feedback_evidence})
         score = round(score + personal_score, 4)
         official_used=any(q.get('nutrition_source') in ('official_imported','catalog_published') for q in qualities)
         candidates.append({'recipe_id':recipe['id'],'name':recipe['name'],'cook_time_minutes':recipe['cook_time_minutes'],'nutrition_per_serving':nutrition,'nutrition_confidence':'official imported (explicit mapping)' if official_used else '데모 추정치','inventory_usage':usage,'scores':{'inventory':round(inv,2),'nutrition_balance':round(balance,2),'primary_strategy':round(primary,2),'secondary_strategy':round(secondary,2),'preference':pref,'feasibility':round(feasibility,2),'variety':variety,'total':score},'purchase_missing_g':round(missing,2),'adjustments':[{'member_id':p['id'],'servings':1,'sauce':'기본 분량','topping':'기본 구성','nutrition':nutrition,'remaining_targets':remaining[p['id']]} for p in people]})
         candidates[-1].update({'personalization_score':personal_score, 'applied_preference_signals':applied, 'ignored_preference_signals':ignored, 'explanation_facts':{'personalization_score':personal_score, 'preference_signals':applied}, 'recommendation_reason_codes':['PERSONALIZED'] if applied else []})
         quality_status='demo_data' if any(q['source_type']=='demo' or q['nutrition_source']=='demo' for q in qualities) else 'confirmation_required' if warnings else 'verified'
         candidates[-1].update({'data_quality':quality_status,'warnings':sorted(set(warnings)),'requires_confirmation':bool(warnings)})
+        candidates[-1]['cooking_guidance'] = cooking_guidance
     candidates.sort(key=lambda c:(-c['scores']['total'],-sum(x['needed_g'] for x in c['inventory_usage'] if x['priority']==1),-c['scores']['primary_strategy'],c['purchase_missing_g'],c['cook_time_minutes'],c['recipe_id']))
     for candidate in candidates:
         for adjustment in candidate['adjustments']:
             adjustment['meal_target_estimate']={n:round(v/3,2) for n,v in adjustment['remaining_targets'].items()}
     snapshot = {'request':req,'as_of':today,'participants':people,'inventory':inventory,'recipes':[dict(r) for r in db.execute('SELECT * FROM recipes ORDER BY id')], 'recipe_ingredients':[dict(r) for r in db.execute('SELECT * FROM recipe_ingredients ORDER BY recipe_id,ingredient_id')], 'nutrition':[dict(r) for r in db.execute('SELECT * FROM ingredient_nutrition ORDER BY ingredient_id')], 'storage_guidelines':[dict(r) for r in db.execute('SELECT * FROM ingredient_storage_guidelines ORDER BY ingredient_id,guideline,unopened_days,opened_days,frozen_days,recommended_storage')], 'remaining':remaining, 'excluded':excluded, 'scores':[(c['recipe_id'],c['scores'],c['personalization_score']) for c in candidates]}
     snapshot['ingredients']=[dict(r) for r in db.execute('SELECT * FROM ingredients ORDER BY id')]
+    if feedback_facts:
+        snapshot['meal_feedback'] = feedback_facts
+        snapshot['feedback_policy'] = FEEDBACK_POLICY
     snapshot['allergen_tags']=[dict(r) for r in db.execute('SELECT * FROM ingredient_allergen_tags ORDER BY ingredient_id,allergen_code')]
     snapshot['allergen_aliases']=[dict(r) for r in db.execute('SELECT * FROM allergen_aliases ORDER BY alias')]
     fingerprint=hashlib.sha256(json.dumps(snapshot,sort_keys=True,ensure_ascii=False).encode('utf-8')).hexdigest()

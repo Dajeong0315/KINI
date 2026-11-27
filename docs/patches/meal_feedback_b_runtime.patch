@@ -1,0 +1,76 @@
+--- a/app/b_runtime.py
++++ b/app/b_runtime.py
+@@ -27,6 +27,17 @@
+     ('POST', r'/api/cooking-sessions/[1-9][0-9]*/ingredients'),
+     ('POST', r'/api/cooking-sessions/[1-9][0-9]*/complete'),
+ )
++FEEDBACK_ROUTES = (
++    ('GET', r'/api/meal-records/[1-9][0-9]*/participants/[1-9][0-9]*/feedback'),
++    ('PUT', r'/api/meal-records/[1-9][0-9]*/participants/[1-9][0-9]*/feedback'),
++)
++
++
++def feedback_enabled():
++    value = os.getenv('KINI_B_MEAL_FEEDBACK_ENABLED', '0')
++    if value not in {'0', '1'}:
++        raise RuntimeError('Explicit feedback feature flag must be 0 or 1')
++    return value == '1'
+ 
+ 
+ def failure(code):
+@@ -36,6 +47,7 @@
+ 
+ 
+ def settings():
++    feedback_enabled()
+     mode = os.environ.get('KINI_B_AI_MODE')
+     storage = os.environ.get('KINI_B_STORAGE')
+     if mode not in MODES or storage not in {'synthetic-sqlite', 'postgres'}:
+@@ -146,6 +158,15 @@
+     # dispatcher still excludes all A inventory mutation endpoints.
+     app.register_blueprint(data_status)
+     app.register_blueprint(api.api)
++    if feedback_enabled():
++        from app.meal_feedback_app import load_feedback_options
++        from app.services.meal_feedback import MealFeedbackService
++        from app.services.meal_feedback_api import create_meal_feedback_blueprint
++        from app.services.meal_feedback_store import SqlFeedbackStore
++        options_path = os.getenv('KINI_MEAL_FEEDBACK_OPTIONS_FILE')
++        options = load_feedback_options(options_path) if options_path else None
++        feedback = MealFeedbackService(SqlFeedbackStore().transaction, options=options)
++        app.register_blueprint(create_meal_feedback_blueprint(feedback))
+     return app
+ 
+ 
+@@ -161,6 +182,17 @@
+             else:
+                 db = connect()
+             with closing(db):
++                if feedback_enabled():
++                    options_path = os.getenv('KINI_MEAL_FEEDBACK_OPTIONS_FILE')
++                    if options_path:
++                        from app.meal_feedback_app import load_feedback_options
++                        load_feedback_options(options_path)
++                    db.execute('SELECT record_id,member_id,status,taste,seasoning,difficulty,revision,updated_at FROM meal_feedback LIMIT 0')
++                    if storage == 'postgres':
++                        allowed = all(db.execute("SELECT has_table_privilege(current_user,'meal_feedback',?)", (privilege,)).fetchone()[0]
++                                      for privilege in ('SELECT', 'INSERT', 'UPDATE'))
++                        if not allowed:
++                            raise RuntimeError('Feedback runtime grants missing')
+                 for table in ('local_accounts', 'auth_sessions', 'account_households', 'members',
+                               'recipes', 'recommendation_requests', 'cooking_sessions'):
+                     db.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone()
+@@ -243,11 +275,11 @@
+         finally:
+             gate.release()
+ 
+-    @app.route('/api/<path:rest>', methods=['GET', 'POST'])
++    @app.route('/api/<path:rest>', methods=['GET', 'POST', 'PUT'])
+     def dispatch(rest):
+         if (request.method, request.path) not in ROUTES and not any(
+                 method == request.method and re.fullmatch(pattern, request.path)
+-                for method, pattern in RESOURCE_ROUTES):
++                for method, pattern in RESOURCE_ROUTES + (FEEDBACK_ROUTES if feedback_enabled() else ())):
+             return jsonify({'error': '이 B 텍스트 배포에서 제공하지 않는 경로입니다.'}), 404
+         body = request.get_data()
+         if not gate.acquire(blocking=False):

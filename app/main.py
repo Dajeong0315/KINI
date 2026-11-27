@@ -186,6 +186,16 @@ app.register_blueprint(family_api)
 from app.services.meal_reporting_api import api as meal_reports_api
 app.register_blueprint(meal_reports_api)
 
+if os.getenv('KINI_B_MEAL_FEEDBACK_ENABLED', '0') == '1':
+    from app.meal_feedback_app import load_feedback_options
+    from app.services.meal_feedback import MealFeedbackService
+    from app.services.meal_feedback_api import create_meal_feedback_blueprint
+    from app.services.meal_feedback_store import SqlFeedbackStore
+    app.register_blueprint(create_meal_feedback_blueprint(MealFeedbackService(
+        SqlFeedbackStore().transaction,
+        options=load_feedback_options(os.environ['KINI_MEAL_FEEDBACK_OPTIONS_FILE']),
+    )))
+
 
 if __name__ == "__main__":
     debug = os.getenv("FLASK_DEBUG") == "1"

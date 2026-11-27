@@ -1,5 +1,7 @@
 """Synthetic Vision events over real loopback HTTP against disposable PostgreSQL."""
 import os
+import json
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
 from secrets import token_urlsafe
@@ -13,6 +15,7 @@ from werkzeug.serving import make_server
 from app.services import local_identity
 from app.services.recommendation_repository import open_db
 from fridge_vision.kini_inventory_client import KiniAPIError, KiniInventoryClient
+from fridge_vision.kini_result_bridge import submit_result
 
 
 pytestmark = pytest.mark.skipif(
@@ -71,6 +74,27 @@ def _detection(api, *, label="synthetic ingredient", action="stock_in", event_id
         client_event_id=event_id or str(uuid4()), detected_label=label,
         source="mock", action=action, confidence=0.91,
     )
+
+
+def test_saved_real_yolo_output_pending_and_explicit_confirmation(server, tmp_path):
+    base, http, login = server
+    api = KiniInventoryClient(base, login(), tmp_path / 'actual-result-queue.jsonl')
+    with _database() as db:
+        db.execute("UPDATE ingredients SET name='버터' WHERE id=901")
+    incoming = _detection(api)
+    lot = api.confirm(incoming['event_id'], ingredient_id=901, quantity_g=100)['inventory_item_id']
+    result = json.loads((Path(__file__).parent / 'fixtures/vision/real_sample_9159259.json').read_text(encoding='utf-8'))
+    (pending,) = submit_result(api, result)
+    assert pending['source'] == 'yolo' and pending['requires_confirmation'] and not pending['is_demo']
+    assert submit_result(api, result) == [pending]
+    snapshot = http.get(base + '/api/data/inventory', headers={'Authorization': 'Bearer ' + api.token}, timeout=5).json()
+    assert snapshot['pending_events'] == [pending]
+    assert snapshot['items'][0]['quantity_g'] == 100
+    applied = api.confirm(pending['event_id'], ingredient_id=901, quantity_g=10, inventory_item_id=lot)
+    assert api.confirm(pending['event_id'], ingredient_id=901, quantity_g=10, inventory_item_id=lot) == applied
+    with _database() as db:
+        assert db.execute('SELECT quantity_g FROM inventory_items WHERE id=?', (lot,)).fetchone()[0] == 90
+        assert db.execute('SELECT count(*) FROM inventory_event_changes WHERE event_id=?', (pending['event_id'],)).fetchone()[0] == 1
 
 
 def _state():

@@ -9,7 +9,7 @@ from .recommendation_repository import open_db, members
 from .recommendation_models import RecommendationRequest, MealSessionRequest, MealRecordRequest, ConversationRequest, MessageRequest, FeedbackRequest, CookingAdjustmentRequest, CookingSessionRequest, CookingChangeRequest, CookingCompleteRequest, CookingQuestionRequest, InventoryNormalizeRequest, InventoryItemRequest
 from .recommendation_engine import recommend, persist_recommendation, NUTRIENTS
 from .recommendation_llm import explain_recommendation, parse_recommendation_request, extract_preference_signal
-from .ai.recommendation_chain import enrich_with_ai
+from .ai.recommendation_chain import enrich_with_ai, is_current_rules_only_result
 from .personalization import add_evidence, aggregate, record_recipe, recipe_features, update_summary
 from . import cooking
 from .errors import ServiceError
@@ -306,8 +306,15 @@ def create_session():
         cur=db.execute('INSERT INTO meal_sessions(household_id,meal_type) VALUES (?,?)',(obj.household_id,obj.meal_type))
         db.executemany('INSERT INTO meal_session_participants VALUES (?,?)',[(cur.lastrowid,i) for i in ids])
         if getattr(db, 'is_postgres', False):
-            db.execute('INSERT INTO meal_data_context SELECT ?,source_code,release_id FROM active_data_releases',
-                       (cur.lastrowid,))
+            if os.getenv('KINI_PUBLIC_CATALOG_BACKEND','app') == 'supabase':
+                db.execute('''INSERT INTO meal_data_context(meal_session_id,source_code,release_id)
+                    SELECT ?,a.source_code,CAST(a.release_id AS TEXT) FROM public.active_data_releases a
+                    JOIN public.data_releases r ON r.id=a.release_id AND r.source_code=a.source_code
+                    JOIN public.data_sources s ON s.code=a.source_code
+                    WHERE r.status='published' AND s.rights_status='approved' ''', (cur.lastrowid,))
+            else:
+                db.execute('INSERT INTO meal_data_context SELECT ?,source_code,release_id FROM active_data_releases',
+                           (cur.lastrowid,))
         return jsonify({'session_id':cur.lastrowid,'household_id':obj.household_id,'meal_type':obj.meal_type,'participant_ids':ids}),201
 
 @api.post('/api/recommendations')
@@ -344,7 +351,8 @@ def get_recommendation(request_id):
     result=json.loads(row[0])
     if result.pop('_catalog_context', None) != current_catalog and result.get('status') == 'recommendations_available':
         result.update(status='stale_unvalidated', recommendations=[], requires_confirmation=True)
-    if result.get('status') == 'recommendations_available' and not result.get('ai_explanation'):
+    if (result.get('status') == 'recommendations_available' and not result.get('ai_explanation')
+        and not is_current_rules_only_result(result)):
         result.update({'status':'stale_unvalidated','recommendations':[], 'requires_confirmation':True, 'message':'저장된 추천은 현재 정보로 다시 검증해야 합니다. 다시 추천받아 주세요.'})
     if 'data_quality' not in result:
         result.update({'status':'stale_unvalidated','data_quality':'confirmation_required','requires_confirmation':True,'warnings':['이전 규칙으로 저장된 결과입니다. 현재 정보로 다시 추천받으세요.']})

@@ -133,7 +133,14 @@ def history(db, household_id, start_date, end_date, *, member_id=None, limit=20,
 
 def detail(db, household_id, record_id):
     rows = _base(db,household_id,record_id=record_id)
-    return _hydrate(db,household_id,rows)[0] if rows else None
+    if not rows:
+        return None
+    result = _hydrate(db,household_id,rows)[0]
+    result['participants'] = [dict(row) for row in db.execute('''SELECT m.id,m.name
+        FROM meal_session_participants p JOIN members m ON m.id=p.member_id
+        WHERE p.session_id=? AND m.household_id=? ORDER BY m.id''',
+        (result['meal_session_id'], household_id))]
+    return result
 
 
 def _period_rows(db, household_id, start_date, end_date, member_id):

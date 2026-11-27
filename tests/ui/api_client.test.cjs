@@ -9,6 +9,7 @@ function client(handler) {
     setTimeout,
     clearTimeout,
     crypto: require("node:crypto").webcrypto,
+    URLSearchParams,
     fetch: async (path, options) => {
       calls.push({
         path,
@@ -25,6 +26,117 @@ const response = (body, status = 200) => ({
   ok: status < 400,
   status,
   json: async () => body,
+});
+
+test("meal feedback uses authenticated PUT and invalidates old recommendation", async () => {
+  const {api,calls}=client(path => identity(path) || response({record_id:7,member_id:3,scope:"meal",revision:1}));
+  await api.login("synthetic","synthetic-password",1);
+  api.state.result={status:"recommendations_available",recommendations:[]};
+  await api.saveFeedback(7,3,{status:"submitted",expected_revision:0,ratings:{taste:"taste_satisfied"}});
+  const saved=calls.at(-1);
+  assert.equal(saved.method,"PUT");
+  assert.equal(saved.headers.Authorization,"Bearer synthetic-token");
+  assert.equal(saved.body.expected_revision,0);
+  assert.equal(api.state.result,null);
+});
+
+function identity(path) {
+  if (path === "/api/auth/login") return response({ access_token: "synthetic-token", household_id: 1,
+    role: "owner", expires_at: Date.now()/1000 + 3600 });
+  if (path === "/api/households/1") return response({id:1,members:[{id:3}]});
+}
+
+test('vision confirmation freezes a lost request, retries same payload, and clears on owner change', async () => {
+  let lost = true;
+  const {api,calls} = client(path => {
+    const auth = identity(path);
+    if (auth) return auth;
+    if (path.endsWith('/confirm')) {
+      if (lost) { lost = false; throw new Error('synthetic loss'); }
+      return response({status:'applied',event_id:7});
+    }
+    return response({});
+  });
+  await api.login('owner','synthetic-password',1);
+  const body = {ingredient_id:901,quantity_g:10,inventory_item_id:3};
+  await assert.rejects(api.confirmVision(7,body));
+  await assert.rejects(api.confirmVision(7,{...body,quantity_g:20}),/이전 확정/);
+  await assert.rejects(api.rejectVision(7),/결과를 먼저/);
+  assert.equal((await api.confirmVision(7,body)).status,'applied');
+  const writes = calls.filter(x => x.path.endsWith('/confirm'));
+  assert.equal(writes.length,2);
+  assert.deepEqual(writes[0].body,writes[1].body);
+  assert.equal(api.visionConfirmation(7),undefined);
+  lost = true;
+  await assert.rejects(api.confirmVision(8,body));
+  assert.ok(api.visionConfirmation(8));
+  await api.login('other-owner','synthetic-password',1);
+  assert.equal(api.visionConfirmation(8),undefined);
+});
+
+test("inventory normalization and all private calls attach the household bearer", async () => {
+  const {api,calls}=client(path => identity(path) || response(path.includes("normalize")
+    ? {ingredient:{ingredient_id:1},conversion:{quantity_g:25}}
+    : path.endsWith("/confirm") ? {status:"applied"} : {event_id:9}));
+  await api.login("synthetic","synthetic-password",1);
+  await api.addInventory("synthetic ingredient",25,null);
+  for (const call of calls.slice(1)) assert.equal(call.headers.Authorization,"Bearer synthetic-token");
+  assert.ok(calls.some(call=>call.path==="/api/inventory/normalize"));
+});
+
+test("stored reports distinguish empty from failed lookup and clear on expiration", async () => {
+  let fail=false;
+  const {api,calls}=client(path=>identity(path) || (fail ? response({error:"offline"},503)
+    : response(path.startsWith("/api/meal-records?") ? {household_id:1,records:[],total:0}
+      : {household_id:1,nutrition_totals:{energy_kcal:null}})));
+  await api.login("synthetic","synthetic-password",1);
+  await api.loadReports({period:"today",member_id:3});
+  assert.equal(api.state.reportsStatus,"ready");
+  assert.equal(api.state.history.total,0);
+  assert.equal(api.state.nutritionReport.nutrition_totals.energy_kcal,null);
+  assert.ok(calls.find(c=>c.path.includes("member_id=3")&&c.path.includes("period=today")));
+  fail=true;
+  await assert.rejects(()=>api.loadReports());
+  assert.equal(api.state.reportsStatus,"error");
+  assert.equal(api.state.history,null);
+  api.state.session.expiresAt=0;
+  await assert.rejects(()=>api.loadReports(),{status:401});
+  assert.equal(api.state.session,null);
+  assert.equal(api.state.nutritionReport,null);
+});
+
+test("a report response from a previous session never populates the next family", async () => {
+  const pending=[];
+  const {api}=client(path=>identity(path) || new Promise(resolve=>pending.push(resolve)));
+  await api.login("synthetic","synthetic-password",1);
+  const reports=api.loadReports();
+  api.clearSession();
+  api.state.household={id:2,members:[]};
+  pending[0](response({household_id:1,records:[{record_id:90}]}));
+  pending[1](response({household_id:1,nutrition_totals:{energy_kcal:500}}));
+  await assert.rejects(()=>reports,{status:409});
+  assert.equal(api.state.history,null);
+  assert.equal(api.state.nutritionReport,null);
+});
+
+test("lost save response is resolved by GET without another completion write", async () => {
+  let writes=0;
+  const {api,calls}=client(path=>{
+    if(identity(path)) return identity(path);
+    if(path.endsWith("/complete")) {writes++;throw Error("lost response");}
+    return response({id:4,status:"completed",meal_record_id:8,nutrition_per_serving:{energy_kcal:50}});
+  });
+  await api.login("synthetic","synthetic-password",1);
+  api.selectMembers([3]);
+  api.state.cooking={id:4,status:"active"};
+  const items=[{member_id:3,servings:.5}];
+  await assert.rejects(()=>api.complete(items,true,false,[9]));
+  await assert.rejects(()=>api.complete([{member_id:3,servings:1}],true,false,[9]),{status:409});
+  await api.complete(items,true,false,[9]);
+  assert.equal(writes,1);
+  assert.equal(api.state.cooking.meal_record_id,8);
+  assert.equal(api.state.receipts[0].items[0].servings,.5);
+  assert.equal(calls.filter(c=>c.path==="/api/cooking-sessions/4").length,1);
 });
 const success = {
   request_id: 1,

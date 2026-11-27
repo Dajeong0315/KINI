@@ -26,11 +26,18 @@
       data: null,
       dataErrors: [],
       ingredientNames: {},
+      history: null,
+      nutritionReport: null,
+      reportsStatus: "idle",
+      reportsError: "",
+      recordDetail: null,
     };
     let seen = [];
     let token = null;
     let submittedMeal = null;
     let incoming = null;
+    const visionConfirmations = new Map(), visionBusy = new Set();
+    let sessionEpoch = 0, reportEpoch = 0, owner = null, saving = false;
     function eventKey() {
       const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
       bytes[6] = (bytes[6] & 15) | 64;
@@ -40,16 +47,17 @@
       ).join("");
       return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
     }
-    async function request(path, body, authenticated = false) {
+    async function request(path, body, authenticated = path !== "/api/auth/login" && Boolean(token), method) {
       if (authenticated && (!token || Date.now() >= state.session.expiresAt)) {
         clearSession();
         throw new APIError("다시 로그인해 주세요.", 401);
       }
       const c = new AbortController(),
         timer = setTimeout(() => c.abort(), 20000);
+      const issuedEpoch = sessionEpoch;
       try {
         const r = await fetchImpl(path, {
-          method: body === undefined ? "GET" : "POST",
+          method: method || (body === undefined ? "GET" : "POST"),
           headers: {
             Accept: "application/json",
             ...(authenticated ? { Authorization: `Bearer ${token}` } : {}),
@@ -61,13 +69,15 @@
           signal: c.signal,
           cache: "no-store",
         });
-        if (authenticated && r.status === 401) clearSession();
         let v;
         try {
           v = await r.json();
         } catch {
           throw new APIError("서버 응답을 읽을 수 없습니다.", r.status);
         }
+        if (authenticated && issuedEpoch !== sessionEpoch)
+          throw new APIError("가구 또는 세션이 변경되었습니다. 다시 조회해 주세요.", 409);
+        if (authenticated && r.status === 401) clearSession();
         if (!r.ok)
           throw new APIError(
             v.error || "서버 요청에 실패했습니다.",
@@ -106,10 +116,16 @@
       };
     }
     function clearSession() {
+      sessionEpoch++;
+      reportEpoch++;
       token = null;
       state.session = null;
       state.inventory = null;
       state.inventoryStatus = "idle";
+      state.history = state.nutritionReport = state.recordDetail = state.data = null;
+      state.reportsStatus = "idle";
+      state.reportsError = "";
+      state.receipts = [];
     }
     async function login(login_name, password, household_id) {
       if (
@@ -119,11 +135,15 @@
         throw new APIError(
           "진행 중인 조리를 이어가려면 같은 가구로 로그인해 주세요.",
         );
+      const previousOwner = owner;
+      const nextOwner = `${login_name.trim().toLowerCase()}:${household_id}`;
+      const ticket = ++sessionEpoch;
       const v = await request("/api/auth/login", {
         login_name,
         password,
         household_id,
       });
+      if (ticket !== sessionEpoch) throw new APIError("로그인 요청이 변경되었습니다.", 409);
       state.session = { role: v.role, expiresAt: v.expires_at * 1000 };
       token = v.access_token;
       let household;
@@ -133,7 +153,7 @@
         clearSession();
         throw error;
       }
-      if (state.household?.id !== v.household_id) {
+      if (state.household?.id !== v.household_id || previousOwner !== nextOwner) {
         invalidate();
         state.selected = [];
         state.receipts = [];
@@ -141,7 +161,14 @@
         state.cooking = null;
         state.outflows = null;
         incoming = null;
+        visionConfirmations.clear();
+        visionBusy.clear();
+        submittedMeal = null;
+        state.history = state.nutritionReport = state.recordDetail = state.data = null;
+        state.reportsStatus = "idle";
+        reportEpoch++;
       }
+      owner = nextOwner;
       state.household = household;
     }
     async function addMember(profile) {
@@ -174,8 +201,48 @@
         releases: v[0].status === "fulfilled" ? v[0].value : null,
         quality: v[1].status === "fulfilled" ? v[1].value : null,
         datasetMode: v[2].status === "fulfilled" ? v[2].value.dataset_mode : null,
+        feedbackEnabled: v[2].status === "fulfilled" && v[2].value.meal_feedback_enabled === true,
       };
       return state.data;
+    }
+    async function loadReports({ period = "week", member_id = null, offset = 0, start_date, end_date } = {}) {
+      const id = ++reportEpoch;
+      state.history = state.nutritionReport = state.recordDetail = null;
+      state.reportsStatus = "loading";
+      state.reportsError = "";
+      const params = new URLSearchParams({ household_id: state.household.id, period });
+      if (member_id != null) params.set("member_id", member_id);
+      if (period === "custom") {
+        params.set("start_date", start_date);
+        params.set("end_date", end_date);
+      }
+      try {
+        const [history, report] = await Promise.all([
+          request(`/api/meal-records?${params}&limit=20&offset=${offset}`, undefined, true),
+          request(`/api/reports/nutrition?${params}`, undefined, true),
+        ]);
+        if (id !== reportEpoch) throw new APIError("가구 또는 조회 기간이 변경되었습니다.", 409);
+        if (history.household_id !== state.household.id || report.household_id !== state.household.id ||
+            !Array.isArray(history.records) || !report.nutrition_totals)
+          throw new APIError("식사 기록 응답을 확인해 주세요.");
+        state.history = history;
+        state.nutritionReport = report;
+        state.reportsStatus = "ready";
+        return history;
+      } catch (error) {
+        if (id === reportEpoch) {
+          state.reportsStatus = "error";
+          state.reportsError = error.message;
+        }
+        throw error;
+      }
+    }
+    async function mealDetail(recordId) {
+      state.recordDetail = null;
+      const result = await request(`/api/meal-records/${recordId}?household_id=${state.household.id}`, undefined, true);
+      if (result.household_id !== state.household.id) throw new APIError("가구가 변경되었습니다.", 409);
+      state.recordDetail = result;
+      return result;
     }
     async function recommend(c, more = false) {
       unlocked();
@@ -357,6 +424,7 @@
       }
     }
     async function complete(items, confirmed, manual, existingIds = []) {
+      if (saving) throw new APIError("식사 기록을 저장 중입니다. 결과를 기다려 주세요.", 409);
       if (!confirmed || state.cooking?.status !== "active")
         throw new APIError("조리 내용과 실제 섭취량을 확인해 주세요.");
       const ids = items.map((i) => i.member_id);
@@ -400,6 +468,11 @@
           code: "inventory_confirmation_required",
         });
       const path = `/api/cooking-sessions/${state.cooking.id}`;
+      const signature = JSON.stringify([eaten, eventIds]);
+      if (submittedMeal && submittedMeal.signature !== signature)
+        throw new APIError("이전 저장의 처리 여부를 먼저 확인해 주세요. 같은 섭취량으로 재시도할 수 있습니다.", 409);
+      saving = true;
+      try {
       let v;
       if (submittedMeal) {
         const draft = await request(path);
@@ -412,13 +485,13 @@
         }
       }
       if (!v) {
-        submittedMeal = eaten;
+        submittedMeal ||= { items: eaten, eaten_at: new Date().toISOString(), signature };
         v = await request(
           `${path}/complete`,
           {
             confirmed: true,
-            eaten_at: new Date().toISOString(),
-            items: eaten,
+            eaten_at: submittedMeal.eaten_at,
+            items: submittedMeal.items,
             inventory_event_ids: eventIds,
           },
           true,
@@ -435,8 +508,8 @@
         saved_date: new Date().toLocaleDateString("sv-SE", {
           timeZone: "Asia/Seoul",
         }),
-        items: submittedMeal,
-        name: state.result.recommendations.find(
+        items: submittedMeal.items,
+        name: state.result?.recommendations.find(
           (r) => r.recipe_id === state.picked,
         )?.name,
       });
@@ -444,9 +517,17 @@
       submittedMeal = null;
       state.inventory = null;
       state.inventoryStatus = "idle";
+      state.history = state.nutritionReport = state.recordDetail = null;
+      state.reportsStatus = "idle";
       // A new recommendation must supply a fresh inventory snapshot after completion.
       if (state.result) state.result.inventory_snapshot = [];
       return v;
+      } catch (error) {
+        // A definitive validation/authorization rejection did not save. Let
+        // the user correct it; network loss/timeouts retain the exact payload.
+        if ([400, 403, 404, 409, 422].includes(error.status)) submittedMeal = null;
+        throw error;
+      } finally { saving = false; }
     }
     return {
       state,
@@ -462,6 +543,48 @@
       prepareOutflows,
       confirmOutflows,
       inventory,
+      async resolveVisionIngredient(name) {
+        const normalized = await request('/api/inventory/normalize', { name, quantity: 1, unit: 'g' }, true);
+        if (!normalized.ingredient?.ingredient_id || normalized.ingredient.match_status !== 'matched')
+          throw new APIError('등록된 표준 재료를 선택해 주세요. Unknown은 자동 등록하지 않습니다.');
+        return normalized.ingredient;
+      },
+      visionConfirmation(eventId) { return visionConfirmations.get(eventId); },
+      async confirmVision(eventId, body) {
+        if (visionBusy.has(eventId)) throw new APIError('확정 처리 중입니다.', 409);
+        const previous = visionConfirmations.get(eventId);
+        if (previous && JSON.stringify(previous) !== JSON.stringify(body))
+          throw new APIError('이전 확정 응답을 확인 중입니다. 같은 내용으로 재시도하거나 재고를 새로고침해 주세요.', 409);
+        visionConfirmations.set(eventId, { ...body });
+        visionBusy.add(eventId);
+        try {
+          const result = await request(`/api/data/inventory/events/${eventId}/confirm`, body, true);
+          visionConfirmations.delete(eventId);
+          invalidate();
+          state.inventory = null;
+          state.inventoryStatus = 'idle';
+          return result;
+        } catch (error) {
+          if ([400, 403, 404, 409, 422].includes(error.status)) visionConfirmations.delete(eventId);
+          throw error;
+        } finally { visionBusy.delete(eventId); }
+      },
+      async rejectVision(eventId) {
+        if (visionBusy.has(eventId) || visionConfirmations.has(eventId))
+          throw new APIError('확정 요청의 결과를 먼저 재조회해 주세요.', 409);
+        return request(`/api/data/inventory/events/${eventId}/reject`, {}, true);
+      },
+      loadReports,
+      mealDetail,
+      feedback(recordId, memberId) {
+        return request(`/api/meal-records/${recordId}/participants/${memberId}/feedback`, undefined, true);
+      },
+      async saveFeedback(recordId, memberId, payload) {
+        unlocked();
+        const result = await request(`/api/meal-records/${recordId}/participants/${memberId}/feedback`, payload, true, "PUT");
+        invalidate();
+        return result;
+      },
       selectMembers(ids) {
         unlocked();
         if (
@@ -493,7 +616,7 @@
           name,
           quantity,
           unit,
-        });
+        }, true);
         if (!n.ingredient.ingredient_id || n.conversion.quantity_g == null)
           throw new APIError(
             "등록된 재료와 실제 중량을 확인해 주세요. 미매칭 재료 등록 API는 아직 없습니다.",

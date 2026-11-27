@@ -11,7 +11,7 @@ from .errors import ServiceError
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "system.md"
-DEFAULT_MODEL = "qwen3.5:4b-q4_K_M"
+DEFAULT_MODEL = "qwen2.5:3b-instruct-q4_K_M"
 
 
 def configured_model() -> str:

@@ -93,6 +93,12 @@ class PublicCatalog:
         self.jitter=jitter or (lambda:random.uniform(.9,1.1)); self.stats=stats or PatternStats()
         self.locks=[Lock() for _ in range(64)]
 
+    def _pointer(self,db,source):
+        return db.execute('''SELECT p.release_id,p.cache_version FROM active_data_releases p
+            JOIN data_releases r ON r.id=p.release_id AND r.source_code=p.source_code
+            JOIN catalog_data_sources s ON s.code=p.source_code
+            WHERE p.source_code=? AND r.status='published' AND s.rights_status='approved' ''',(source,)).fetchone()
+
     def _load(self,db,source,release,version,kind,external_id):
         table='catalog_foods' if kind=='food' else 'catalog_recipes'
         row=db.execute(f'SELECT * FROM {table} WHERE release_id=? AND external_id=?',(release,external_id)).fetchone()
@@ -110,10 +116,7 @@ class PublicCatalog:
     def read(self,db,source,kind,external_id):
         # Validate request before touching cache: no free text, IDs or health filters.
         if source not in SOURCES or kind not in ('food','recipe') or not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}',external_id): raise ValueError('공개 식품 ID 오류')
-        pointer=db.execute('''SELECT p.release_id,p.cache_version FROM active_data_releases p
-            JOIN data_releases r ON r.id=p.release_id AND r.source_code=p.source_code
-            JOIN catalog_data_sources s ON s.code=p.source_code
-            WHERE p.source_code=? AND r.status='published' AND s.rights_status='approved' ''',(source,)).fetchone()
+        pointer=self._pointer(db,source)
         if not pointer: raise PublicRecordMissing()
         release,version=pointer['release_id'],pointer['cache_version']
         key=cache_key(source,release,version,kind,external_id)
@@ -152,7 +155,7 @@ class PublicCatalog:
 
 
 @lru_cache(maxsize=4)
-def _service(backend,url):
+def _service(backend,url,catalog_backend='app'):
     policy=json.loads((Path(__file__).resolve().parents[2]/'config/cache_policy.json').read_text(encoding='utf-8'))
     if not policy['enabled']: backend='disabled'
     if backend=='redis': cache=RedisCache(url)
@@ -160,9 +163,16 @@ def _service(backend,url):
     elif backend=='disabled': cache=DisabledCache()
     else: raise ValueError('캐시 backend는 memory/redis/disabled입니다.')
     ratio=policy['ttl_jitter_ratio']
-    return PublicCatalog(cache,ttl={'food':policy['targets']['food_detail']['ttl_seconds'],
+    catalog_type=PublicCatalog
+    if catalog_backend=='supabase':
+        from .supabase_catalog import SupabasePublicCatalog
+        catalog_type=SupabasePublicCatalog
+    elif catalog_backend!='app':
+        raise ValueError('공개 카탈로그 backend는 app/supabase입니다.')
+    return catalog_type(cache,ttl={'food':policy['targets']['food_detail']['ttl_seconds'],
         'recipe':policy['targets']['recipe_detail']['ttl_seconds']},jitter=lambda:random.uniform(1-ratio,1+ratio))
 
 
 def service():
-    return _service(os.getenv('KINI_CACHE_BACKEND','memory'),os.getenv('REDIS_URL','redis://127.0.0.1:6379/0'))
+    return _service(os.getenv('KINI_CACHE_BACKEND','memory'),os.getenv('REDIS_URL','redis://127.0.0.1:6379/0'),
+                    os.getenv('KINI_PUBLIC_CATALOG_BACKEND','app'))

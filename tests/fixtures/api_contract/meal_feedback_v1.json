@@ -1,0 +1,268 @@
+{
+  "contract_status": "meal_scoped_one_current_evaluation_with_edits",
+  "path": "/api/meal-records/201/participants/1/feedback",
+  "method": "PUT",
+  "headers": {
+    "Authorization": "Bearer <household-session-token>",
+    "Content-Type": "application/json"
+  },
+  "notice": "One current evaluation per meal. Participant path verifies eligibility; participants share and edit the same revision. Initial skip/close does not PUT. Synthetic examples; production requires migration and enablement.",
+  "examples": {
+    "normal": {
+      "http_status": 200,
+      "request": {
+        "status": "submitted",
+        "expected_revision": 0,
+        "ratings": {
+          "taste": "taste_satisfied"
+        }
+      },
+      "response": {
+        "record_id": 201,
+        "member_id": 1,
+        "recipe_id": 1,
+        "status": "submitted",
+        "ratings": {
+          "taste": "taste_satisfied",
+          "seasoning": null,
+          "difficulty": null
+        },
+        "revision": 1,
+        "personalization_status": "ready_for_next_recommendation",
+        "updated_at": "2026-11-27T09:00:00+00:00",
+        "scope": "meal"
+      }
+    },
+    "duplicate": {
+      "http_status": 200,
+      "request": {
+        "status": "submitted",
+        "expected_revision": 0,
+        "ratings": {
+          "taste": "taste_satisfied"
+        }
+      },
+      "response": {
+        "record_id": 201,
+        "member_id": 1,
+        "recipe_id": 1,
+        "status": "submitted",
+        "ratings": {
+          "taste": "taste_satisfied",
+          "seasoning": null,
+          "difficulty": null
+        },
+        "revision": 1,
+        "personalization_status": "ready_for_next_recommendation",
+        "updated_at": "2026-11-27T09:00:00+00:00",
+        "scope": "meal"
+      }
+    },
+    "edit": {
+      "http_status": 200,
+      "request": {
+        "status": "submitted",
+        "expected_revision": 1,
+        "ratings": {
+          "seasoning": "seasoning_balanced",
+          "difficulty": "difficulty_moderate"
+        }
+      },
+      "response": {
+        "record_id": 201,
+        "member_id": 1,
+        "recipe_id": 1,
+        "status": "submitted",
+        "ratings": {
+          "taste": null,
+          "seasoning": "seasoning_balanced",
+          "difficulty": "difficulty_moderate"
+        },
+        "revision": 2,
+        "personalization_status": "ready_for_next_recommendation",
+        "updated_at": "2026-11-27T09:01:00+00:00",
+        "scope": "meal"
+      }
+    },
+    "skip": {
+      "http_status": 200,
+      "request": {
+        "status": "skipped",
+        "expected_revision": 2
+      },
+      "response": {
+        "record_id": 201,
+        "member_id": 1,
+        "recipe_id": 1,
+        "status": "skipped",
+        "ratings": {
+          "taste": null,
+          "seasoning": null,
+          "difficulty": null
+        },
+        "revision": 3,
+        "personalization_status": "no_evidence",
+        "updated_at": "2026-11-27T09:02:00+00:00",
+        "scope": "meal"
+      }
+    },
+    "not_submitted": {
+      "http_status": 200,
+      "method": "GET",
+      "response": {
+        "record_id": 201,
+        "member_id": 1,
+        "recipe_id": 1,
+        "status": "not_submitted",
+        "ratings": {
+          "taste": null,
+          "seasoning": null,
+          "difficulty": null
+        },
+        "revision": 0,
+        "personalization_status": "no_evidence",
+        "updated_at": null,
+        "scope": "meal"
+      }
+    },
+    "invalid": {
+      "http_status": 400,
+      "request": {
+        "status": "submitted",
+        "expected_revision": 0,
+        "ratings": {
+          "taste": "not_approved"
+        }
+      },
+      "response": {
+        "error": "Check request values.",
+        "code": "invalid_request"
+      }
+    },
+    "conflict": {
+      "http_status": 409,
+      "request": {
+        "status": "submitted",
+        "expected_revision": 0,
+        "ratings": {
+          "taste": "taste_dissatisfied"
+        }
+      },
+      "response": {
+        "error": "Feedback changed. Fetch the latest revision before editing.",
+        "code": "revision_conflict"
+      }
+    },
+    "unconfigured": {
+      "http_status": 503,
+      "request": {
+        "status": "submitted",
+        "expected_revision": 0,
+        "ratings": {
+          "taste": "taste_satisfied"
+        }
+      },
+      "response": {
+        "error": "Feedback options are not configured.",
+        "code": "feedback_options_unconfigured"
+      }
+    },
+    "unauthenticated": {
+      "http_status": 401,
+      "request": {
+        "status": "submitted",
+        "expected_revision": 0,
+        "ratings": {
+          "taste": "taste_satisfied"
+        }
+      },
+      "response": {
+        "error": "Authentication required.",
+        "code": "authentication_required"
+      }
+    },
+    "forbidden": {
+      "http_status": 403,
+      "request": {
+        "status": "submitted",
+        "expected_revision": 0,
+        "ratings": {
+          "taste": "taste_satisfied"
+        }
+      },
+      "response": {
+        "error": "Household write permission required.",
+        "code": "forbidden"
+      }
+    },
+    "target_not_found": {
+      "http_status": 404,
+      "request": {
+        "status": "submitted",
+        "expected_revision": 0,
+        "ratings": {
+          "taste": "taste_satisfied"
+        }
+      },
+      "response": {
+        "error": "Meal feedback target not found.",
+        "code": "feedback_target_not_found"
+      }
+    },
+    "storage_failure": {
+      "http_status": 503,
+      "request": {
+        "status": "submitted",
+        "expected_revision": 0,
+        "ratings": {
+          "taste": "taste_satisfied"
+        }
+      },
+      "response": {
+        "error": "Feedback storage unavailable. Retry later.",
+        "code": "feedback_storage_unavailable"
+      }
+    }
+  },
+  "ui_flow": {
+    "status": "approved_direction_ui_not_implemented",
+    "entry": "optional_after_meal_save",
+    "entry_choices": [
+      "evaluate",
+      "pass"
+    ],
+    "initial_pass": {
+      "requires_member_selection": false,
+      "api_call": null,
+      "effect": "close_prompt_preserve_existing_feedback"
+    },
+    "designated_evaluator": false,
+    "eligible_responders": "participants_of_this_saved_meal",
+    "input_channels": [
+      "display",
+      "voice"
+    ],
+    "voice_status": "planned_input_channel_not_implemented_or_speaker_authentication",
+    "before_submit": "resolve_and_confirm_responding_participant_and_rating_codes",
+    "participant_skip_scope": "only_this_participant_not_the_whole_meal",
+    "repeated_prompt_interval": null
+  },
+  "approved_options": {
+    "taste": [
+      "taste_satisfied",
+      "taste_neutral",
+      "taste_dissatisfied"
+    ],
+    "seasoning": [
+      "seasoning_bland",
+      "seasoning_balanced",
+      "seasoning_salty"
+    ],
+    "difficulty": [
+      "difficulty_easy",
+      "difficulty_moderate",
+      "difficulty_hard"
+    ]
+  },
+  "scope": "meal"
+}

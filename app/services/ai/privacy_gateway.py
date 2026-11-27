@@ -96,8 +96,9 @@ def _unsafe_source_field(value: Any, key: str = "") -> str | None:
 class PrivacyGateway:
     """Builds the only payload accepted by ``OpenAIRecommendationClient``."""
 
-    def __init__(self, local_inspector: LocalPrivacyInspector | None = None):
+    def __init__(self, local_inspector: LocalPrivacyInspector | None = None, *, required: bool = False):
         self._local_inspector = local_inspector
+        self._required = required
 
     def prepare(self, request: dict[str, Any], rule_result: dict[str, Any]) -> PrivacyDecision:
         unsafe = _unsafe_source_field(request)
@@ -126,11 +127,26 @@ class PrivacyGateway:
         # cannot accidentally add raw source fields to this boundary.
         if _contains_forbidden(payload):
             return PrivacyDecision("privacy_blocked", reason="generated_payload_not_safe")
+        # Validate the fixed wire contract before asking a local model. The model
+        # receives a copy and cannot mutate the payload subsequently transmitted.
+        from .wire_schema import OutboundRecommendation
+        from copy import deepcopy
+        try:
+            OutboundRecommendation.model_validate(payload)
+        except ValueError:
+            return PrivacyDecision("privacy_blocked", reason="invalid_wire_schema")
+        if self._required and self._local_inspector is None:
+            return PrivacyDecision("api_error", reason="required_inspector_missing")
         if self._local_inspector is not None:
             try:
-                if not self._local_inspector.inspect(payload):
+                inspected = self._local_inspector.inspect(deepcopy(payload))
+                if type(inspected) is not bool:
+                    raise ValueError("invalid inspector result")
+                if not inspected:
                     return PrivacyDecision("privacy_blocked", reason="local_inspector_rejected")
             except Exception:
+                if self._required:
+                    return PrivacyDecision("api_error", reason="required_inspector_failed")
                 # A failing optional inspector cannot widen deterministic policy.
                 pass
         return PrivacyDecision("allowed", payload=payload)

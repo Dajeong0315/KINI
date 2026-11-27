@@ -1,0 +1,7 @@
+# Text B service only. Generate/commit Linux transitive lock after Linux checks.
+Flask==3.0.3
+python-dotenv==1.2.4
+requests==2.34.2
+pydantic==2.14.1
+psycopg[binary]==3.3.9
+gunicorn==23.0.0
