@@ -18,6 +18,7 @@
   --danger: #8b3830;
   --radius: 20px;
   --header: 72px;
+  --mobile-width: 600px;
   --shadow: 0 2px 3px #20362b08, 0 10px 24px #20362b06;
   font-family: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
   line-height: 1.55;
@@ -84,7 +85,7 @@ button:disabled { color: #65716a; background: #ebeee8; border-color: var(--line)
 .text-button { background: transparent; color: var(--green-dark); }
 .text-button:hover:not(:disabled), .icon-button:hover:not(:disabled) { background: var(--soft); }
 .icon-button { background: transparent; font-size: 1.6rem; width: 46px; padding: 0; flex: none; }
-input:not([type=checkbox]), select, textarea {
+input:not([type=checkbox], [type=radio]), select, textarea {
   width: 100%;
   min-width: 0;
   min-height: 46px;
@@ -95,7 +96,7 @@ input:not([type=checkbox]), select, textarea {
   color: var(--ink);
 }
 input:disabled, select:disabled, textarea:disabled { background: var(--soft); }
-input[type=checkbox] { height: 20px; width: 20px; margin: 0; accent-color: var(--green); }
+input[type=checkbox], input[type=radio] { height: 20px; width: 20px; margin: 0; accent-color: var(--green); }
 summary { cursor: pointer; font-weight: 700; min-height: 44px; padding-block: 10px; color: var(--green-dark); }
 details[open] > summary { margin-bottom: 8px; }
 .skip-link, .sr-only {
@@ -132,6 +133,7 @@ details[open] > summary { margin-bottom: 8px; }
 }
 .wordmark {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 10px;
   color: var(--green-dark);
@@ -139,6 +141,7 @@ details[open] > summary { margin-bottom: 8px; }
   font-weight: 800;
   letter-spacing: -.045em;
   text-decoration: none;
+  white-space: nowrap;
 }
 .wordmark-mark {
   position: relative;
@@ -157,9 +160,32 @@ details[open] > summary { margin-bottom: 8px; }
 .wordmark-mark::before { width: 10px; height: 16px; top: 7px; right: 9px; transform: rotate(24deg); }
 .wordmark-mark::after { width: 9px; height: 12px; bottom: 9px; left: 9px; transform: rotate(-83deg); background: #b9d1b7; }
 .tagline { font-size: .9rem; color: var(--muted); border-left: 1px solid var(--line); padding-left: 18px; }
-.header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; min-width: 0; }
+.header-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; margin-left: auto; min-width: 0; }
 .header-actions button { white-space: nowrap; }
-.app-layout { display: grid; grid-template-columns: clamp(168px, 17vw, 218px) minmax(0, 1fr); min-height: calc(100dvh - var(--header)); }
+.device-switcher {
+  display: inline-flex;
+  flex: none;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--soft);
+}
+.device-switcher button { min-height: 42px; padding: 6px 11px; border-radius: 9px; font-size: .875rem; }
+.device-switcher button[aria-pressed="false"]:not(:disabled) { border-color: transparent; background: transparent; }
+.device-switcher button[aria-pressed="false"]:hover:not(:disabled) { background: var(--paper); }
+.app-layout {
+  container: device-layout / inline-size;
+  display: grid;
+  grid-template-columns: clamp(168px, 17vw, 218px) minmax(0, 1fr);
+  min-height: calc(100dvh - var(--header));
+}
+.app-shell[data-device="mobile"] .app-layout {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, var(--mobile-width));
+  margin-inline: auto;
+}
 .sidebar {
   position: sticky;
   top: var(--header);
@@ -198,9 +224,14 @@ details[open] > summary { margin-bottom: 8px; }
 .icon-family::after { left: 1px; bottom: 3px; width: 10px; height: 8px; border: 2px solid currentColor; border-radius: 6px 6px 2px 2px; box-shadow: 7px 0 0 -1px var(--paper), 8px 0 0 0 currentColor; }
 @media (max-width: 760px) {
   :root { --header: 64px; }
-  .topbar { padding-inline: 16px; }
+  .topbar { gap: 8px; padding-inline: 12px; }
   .tagline { display: none; }
+  .header-actions { gap: 5px; }
+  .device-switcher button { min-height: 40px; padding-inline: 7px; font-size: .78rem; }
+  #household-settings { min-height: 44px; padding-inline: 8px; font-size: .82rem; }
   .app-layout { display: flex; flex-direction: column; }
+}
+@container device-layout (max-width: 760px) {
   .sidebar {
     position: static;
     display: grid;
@@ -214,6 +245,26 @@ details[open] > summary { margin-bottom: 8px; }
   }
   .nav-item { justify-content: center; min-height: 54px; gap: 3px; flex-direction: column; padding: 5px 2px; font-size: .77rem; }
   .content { padding: 23px 15px 30px; }
+}
+:root[data-device="mobile"] {
+  --nav-safe-area: env(safe-area-inset-bottom, 0px);
+  --bottom-nav-height: calc(72px + var(--nav-safe-area));
+  scroll-padding-bottom: var(--bottom-nav-height);
+}
+.app-shell[data-device="mobile"] .sidebar {
+  position: fixed;
+  z-index: 2;
+  inset: auto 0 0;
+  width: min(100%, var(--mobile-width));
+  height: var(--bottom-nav-height);
+  margin-inline: auto;
+  padding-bottom: calc(8px + var(--nav-safe-area));
+  border: 0;
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -4px 18px #20362b12;
+}
+.app-shell[data-device="mobile"] .content {
+  padding-bottom: calc(30px + var(--bottom-nav-height));
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }

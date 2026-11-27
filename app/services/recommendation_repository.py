@@ -70,7 +70,13 @@ def initialize(db, *, seed_demo=None):
     if 'code' in source_columns and 'source_key' not in source_columns:
         db.execute('ALTER TABLE data_sources RENAME TO catalog_data_sources')
     db.executescript(SCHEMA)
+    db.execute('BEGIN IMMEDIATE')
     migrations = {
+        'members': {
+            'height_cm': 'REAL CHECK (height_cm BETWEEN 0.1 AND 300)',
+            'weight_kg': 'REAL CHECK (weight_kg BETWEEN 0.1 AND 700)',
+            'activity_level': "TEXT CHECK (activity_level IN ('sedentary', 'low_active', 'active', 'very_active'))",
+        },
         'cooking_sessions': {'planned_servings':'INTEGER'},
         'ingredients': {'canonical_name':'TEXT', 'source_type':"TEXT NOT NULL DEFAULT 'unknown'", 'data_confidence':'REAL', 'is_composite':'INTEGER NOT NULL DEFAULT 0', 'requires_label_check':'INTEGER NOT NULL DEFAULT 0', 'active':'INTEGER NOT NULL DEFAULT 1'},
         'ingredient_aliases': {'normalized_alias':'TEXT', 'alias_type':"TEXT NOT NULL DEFAULT 'unknown'", 'confidence':'REAL', 'source_type':"TEXT NOT NULL DEFAULT 'unknown'"},
@@ -97,6 +103,10 @@ def initialize(db, *, seed_demo=None):
             db.execute(f'ALTER TABLE ingredient_storage_guidelines ADD COLUMN {name} INTEGER')
     if 'recommended_storage' not in guideline_columns:
         db.execute('ALTER TABLE ingredient_storage_guidelines ADD COLUMN recommended_storage TEXT')
+    # Older previews used the shared-feedback table name for account-specific rows.
+    feedback_columns = {row['name'] for row in db.execute('PRAGMA table_info(meal_feedback)')}
+    if 'account_id' in feedback_columns:
+        db.execute('ALTER TABLE meal_feedback RENAME TO meal_account_feedback')
     from .data_platform import migrate
     migrate(db)
     request_columns = {row['name'] for row in db.execute('PRAGMA table_info(recommendation_requests)')}
@@ -117,7 +127,7 @@ def initialize(db, *, seed_demo=None):
     with db:
         db.execute('INSERT INTO households VALUES (?,?)',(1,seed['household']['name']))
         for m in seed['members']:
-            db.execute('INSERT INTO members VALUES (?,?,?,?)',(m['id'],1,m['name'],m['age']))
+            db.execute('INSERT INTO members(id,household_id,name,age) VALUES (?,?,?,?)',(m['id'],1,m['name'],m['age']))
             for s in m['strategies']: db.execute('INSERT INTO member_preferences VALUES (?,?,?)',(m['id'],'strategy',s))
             for s in m.get('dislikes',[]): db.execute('INSERT INTO member_preferences VALUES (?,?,?)',(m['id'],'dislike',s))
             for s in m.get('allergies',[]): db.execute('INSERT INTO member_allergies VALUES (?,?)',(m['id'],s))
@@ -173,8 +183,11 @@ def ingredient_nutrition_row(db, ingredient_id):
         (ingredient_id,)).fetchone()
 
 
-def members(db, household_id, ids=None):
-    rows=db.execute('SELECT * FROM members WHERE household_id=? ORDER BY id',(household_id,)).fetchall()
+def members(db, household_id, ids=None, *, include_physical_profile=False):
+    columns = 'id,household_id,name,age'
+    if include_physical_profile:
+        columns += ',height_cm,weight_kg,activity_level'
+    rows = db.execute(f'SELECT {columns} FROM members WHERE household_id=? ORDER BY id', (household_id,)).fetchall()
     if ids is not None: rows=[r for r in rows if r['id'] in ids]
     result=[]
     for r in rows:

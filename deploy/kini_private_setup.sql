@@ -310,12 +310,49 @@ CREATE TABLE meal_feedback (
 
 INSERT INTO schema_migrations(version) VALUES ('010_meal_feedback') ON CONFLICT DO NOTHING;
 
+-- 011_member_profile.sql SHA256 482b00ddbeff2c01fb03e98066c20891d39a1873421c0113b8b389d8df4a6103
+ALTER TABLE members
+    ADD COLUMN IF NOT EXISTS height_cm DOUBLE PRECISION CHECK (height_cm BETWEEN 0.1 AND 300),
+    ADD COLUMN IF NOT EXISTS weight_kg DOUBLE PRECISION CHECK (weight_kg BETWEEN 0.1 AND 700),
+    ADD COLUMN IF NOT EXISTS activity_level TEXT
+        CHECK (activity_level IN ('sedentary', 'low_active', 'active', 'very_active'));
+
+INSERT INTO schema_migrations(version) VALUES ('011_member_profile') ON CONFLICT DO NOTHING;
+
+-- 012_meal_account_feedback.sql SHA256 5c086a46ab7186754d0a6d401b8369831adb1a6db084c1455b5138ba1fe30d93
+-- Account-specific evaluations recorded in the local nutrition report.
+CREATE TABLE IF NOT EXISTS meal_account_feedback (
+    record_id BIGINT NOT NULL REFERENCES meal_records(id) ON DELETE CASCADE,
+    account_id UUID NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+    taste TEXT CHECK (taste IN ('bad', 'okay', 'good')),
+    salt TEXT CHECK (salt IN ('bland', 'balanced', 'salty')),
+    difficulty TEXT CHECK (difficulty IN ('easy', 'normal', 'hard')),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (record_id, account_id),
+    CHECK (taste IS NOT NULL OR salt IS NOT NULL OR difficulty IS NOT NULL)
+);
+REVOKE ALL ON meal_account_feedback FROM PUBLIC;
+
+-- Provision the runtime role on existing private deployments as well.
+DO $access$ BEGIN
+    IF current_schema() = 'kini_private' AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname='kini_app') THEN
+        ALTER TABLE meal_account_feedback ENABLE ROW LEVEL SECURITY;
+        CREATE POLICY kini_app_backend_access ON meal_account_feedback TO kini_app USING (true) WITH CHECK (true);
+        GRANT SELECT, INSERT, UPDATE ON meal_account_feedback TO kini_app;
+    END IF;
+END $access$;
+
+INSERT INTO schema_migrations(version) VALUES ('012_meal_account_feedback') ON CONFLICT DO NOTHING;
+
 -- Non-exposed schema plus RLS: only the dedicated backend role is admitted.
 -- Household isolation remains the server's authenticated object checks.
 DO $rls$ DECLARE t record; BEGIN
     FOR t IN SELECT tablename FROM pg_tables WHERE schemaname='kini_private' LOOP
         EXECUTE format('ALTER TABLE kini_private.%I ENABLE ROW LEVEL SECURITY', t.tablename);
-        EXECUTE format('CREATE POLICY kini_app_backend_access ON kini_private.%I TO kini_app USING (true) WITH CHECK (true)', t.tablename);
+        IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='kini_private'
+            AND tablename=t.tablename AND policyname='kini_app_backend_access') THEN
+            EXECUTE format('CREATE POLICY kini_app_backend_access ON kini_private.%I TO kini_app USING (true) WITH CHECK (true)', t.tablename);
+        END IF;
     END LOOP;
 END $rls$;
 RESET ROLE;

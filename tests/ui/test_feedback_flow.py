@@ -56,7 +56,8 @@ def test_shared_meal_skip_save_edit_and_reconnect(tmp_path, monkeypatch, browser
         page.locator('body[aria-busy=false]').wait_for()
 
     def open_feedback(title='식후 평가'):
-        page.get_by_role('button', name='식후 평가', exact=True).click()
+        page.locator('.family-meals button').first.click()
+        page.get_by_role('dialog').get_by_role('button', name='식후 평가', exact=True).click()
         page.get_by_role('dialog').get_by_role('heading', name=title, exact=True).wait_for()
         page.locator('body[aria-busy=false]').wait_for()
 
@@ -64,7 +65,7 @@ def test_shared_meal_skip_save_edit_and_reconnect(tmp_path, monkeypatch, browser
         page.goto(f'http://127.0.0.1:{server.server_port}/mobile')
         login()
         page.locator('[data-view-link=report]:visible').first.click()
-        page.get_by_role('heading', name='저장된 식사 이력', exact=True).wait_for()
+        page.get_by_role('heading', name='최근 가족 식사 기록', exact=True).wait_for()
         open_feedback()
         page.get_by_role('dialog').get_by_role('button', name='평가 건너뛰기', exact=True).click()
         assert not writes
@@ -86,7 +87,7 @@ def test_shared_meal_skip_save_edit_and_reconnect(tmp_path, monkeypatch, browser
             assert row['member_id'] == 4 and row['revision'] == 2 and row['taste'] == 'taste_dissatisfied'
         page.reload()
         login()
-        page.get_by_role('heading', name='저장된 식사 이력', exact=True).wait_for()
+        page.get_by_role('heading', name='최근 가족 식사 기록', exact=True).wait_for()
         open_feedback('식후 평가 수정')
         assert page.get_by_role('dialog').locator('section[aria-label="맛"]').get_by_role('button', name='별로예요', exact=True).get_attribute('aria-pressed') == 'true'
         assert len(writes) == 2

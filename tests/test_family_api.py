@@ -195,10 +195,62 @@ def test_current_membership_controls_member_write(client, role):
     assert result.status_code == (201 if role == 'editor' else 403)
 
 
+def test_optional_physical_profile_can_be_updated_and_cleared_within_family(client):
+    hid, headers, _, account_id = _family(client)
+    _, other_headers, _, _ = _family(client, 'other-owner')
+    path = f'/api/households/{hid}/members'
+    profile = client.post(path, headers=headers, json={
+        'name': '구성원', 'age': 10, 'height_cm': 141.5, 'activity_level': 'low_active', 'allergies': ['새우'],
+    }).json
+    assert profile['height_cm'] == 141.5 and profile['weight_kg'] is None
+    assert profile['activity_level'] == 'low_active'
+    member_path = f"{path}/{profile['id']}"
+    assert client.patch(member_path, headers=other_headers, json={'weight_kg': 40}).status_code == 403
+    assert client.patch(member_path, headers=headers, json={'weight_kg': -1}).status_code == 400
+    assert client.patch(member_path, headers=headers, json={'height_cm': True}).status_code == 400
+    assert client.patch(member_path, headers=headers, json={'activity_level': 'unknown'}).status_code == 400
+    updated = client.patch(member_path, headers=headers, json={'weight_kg': 39.2})
+    assert updated.status_code == 200
+    assert updated.json == {**profile, 'weight_kg': 39.2}
+    assert client.patch(member_path, headers=headers, json={'activity_level': 'active'}).json['activity_level'] == 'active'
+    assert client.patch(member_path, headers=headers, json={'height_cm': None, 'activity_level': None}).status_code == 200
+    assert client.get(path, headers=headers).json['members'] == [
+        {**updated.json, 'height_cm': None, 'activity_level': None},
+    ]
+    with closing(open_db()) as db, db:
+        db.execute("UPDATE account_households SET role='viewer' WHERE account_id=?", (account_id,))
+    assert client.patch(member_path, headers=headers, json={'height_cm': 142}).status_code == 403
+
+
+def test_member_update_replaces_only_submitted_profile_fields(client):
+    hid, headers, _, _ = _family(client)
+    path = f'/api/households/{hid}/members'
+    profile = client.post(path, headers=headers, json={
+        'name': '첫째', 'age': 10, 'allergies': ['새우'], 'dislikes': ['버섯'],
+    }).json
+    member_id = profile['id']
+    member_path = f'{path}/{member_id}'
+    with closing(open_db()) as db, db:
+        db.execute('INSERT INTO member_preferences VALUES (?,?,?)', (member_id, 'strategy', 'sodium_management'))
+    assert client.patch(member_path, headers=headers, json={'name': None, 'allergies': []}).status_code == 400
+    assert client.patch(member_path, headers=headers, json={'age': None}).status_code == 400
+    assert client.get(path, headers=headers).json['members'][0]['allergies'] == ['새우']
+
+    update = client.patch(member_path, headers=headers, json={
+        'name': '아들', 'age': 11, 'allergies': ['게', ' 게 '], 'dislikes': [],
+    })
+    assert update.status_code == 200
+    assert update.json == {
+        **profile, 'name': '아들', 'age': 11, 'allergies': ['게'],
+        'preferences': [{'kind': 'strategy', 'value': 'sodium_management'}],
+    }
+    assert client.get(path, headers=headers).json['members'] == [update.json]
+
+
 @pytest.mark.parametrize('changes', [
     {'name': ' '}, {'age': True}, {'age': '12'}, {'age': -1}, {'age': 131},
     {'allergies': ['']}, {'allergies': [1]}, {'allergies': '새우'},
-    {'dislikes': ['a'] * 33}, {'role': 'owner'},
+    {'dislikes': ['a'] * 33}, {'role': 'owner'}, {'activity_level': 3},
 ])
 def test_invalid_profile_does_not_partially_write(client, changes):
     hid, headers, _, _ = _family(client)
@@ -228,10 +280,16 @@ def test_existing_database_migration_preserves_accounts_profiles_and_tokens(clie
     with closing(open_db()) as db, db:
         db.execute('DROP TABLE local_account_sessions')
         db.execute('DELETE FROM platform_migrations WHERE version=3')
+        db.execute('ALTER TABLE members DROP COLUMN height_cm')
+        db.execute('ALTER TABLE members DROP COLUMN weight_kg')
+        db.execute('ALTER TABLE members DROP COLUMN activity_level')
     # Reopening upgrades a database at the prior schema without changing household sessions.
     response = client.get(f'/api/households/{hid}/members', headers=headers)
     assert response.status_code == 200
     assert response.json['members'][0]['id'] == member.json['id']
+    assert response.json['members'][0]['height_cm'] is None
+    assert response.json['members'][0]['weight_kg'] is None
+    assert response.json['members'][0]['activity_level'] is None
     with closing(open_db()) as db:
         assert [r[0] for r in db.execute('SELECT version FROM platform_migrations ORDER BY version')] == [1, 2, 3]
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []

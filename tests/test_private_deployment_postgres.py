@@ -18,7 +18,7 @@ def test_atomic_bundle_roles_grants_and_preserved_catalog():
             db.execute(f'ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY')
             db.execute(f'CREATE POLICY backend_catalog_access ON public.{table} TO service_role USING (true)')
         db.execute(build())
-        assert db.execute('SELECT count(*) FROM kini_private.schema_migrations').fetchone()[0] == 10
+        assert db.execute('SELECT count(*) FROM kini_private.schema_migrations').fetchone()[0] == 12
         owners = db.execute("SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname='kini_private'").fetchall()
         assert owners == [('kini_migrator',)]
         assert db.execute("SELECT count(*) FROM pg_tables WHERE schemaname='kini_private' AND NOT rowsecurity").fetchone()[0] == 0
@@ -33,6 +33,8 @@ def test_atomic_bundle_roles_grants_and_preserved_catalog():
         assert db.execute("SELECT has_schema_privilege(current_user,'kini_private','CREATE')").fetchone()[0] is False
         assert db.execute("SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user").fetchone() == (False, False)
         assert db.execute('SELECT count(*) FROM kini_private.households').fetchone()[0] == 0
+        assert db.execute("SELECT has_table_privilege(current_user,'kini_private.meal_account_feedback','INSERT,UPDATE')").fetchone()[0]
+        assert not db.execute("SELECT has_table_privilege(current_user,'kini_private.meal_account_feedback','DELETE')").fetchone()[0]
         db.execute("INSERT INTO kini_private.households(name) VALUES ('synthetic grant probe')")
         for table in PUBLIC_TABLES:
             assert db.execute(f'SELECT id FROM public.{table}').fetchall() == [(42,)]
@@ -45,4 +47,4 @@ def test_atomic_bundle_roles_grants_and_preserved_catalog():
         with pytest.raises(psycopg.errors.RaiseException):
             db.execute(build())
         db.execute('ROLLBACK')
-        assert db.execute('SELECT count(*) FROM kini_private.schema_migrations').fetchone()[0] == 10
+        assert db.execute('SELECT count(*) FROM kini_private.schema_migrations').fetchone()[0] == 12

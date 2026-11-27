@@ -66,7 +66,7 @@ def test_session_hash_expiry_revocation_and_join(db):
 
 def test_cross_household_participants_and_viewer_writes_rejected(db):
     db.execute("INSERT INTO households VALUES(2,'다른 가구')")
-    db.execute("INSERT INTO members VALUES(99,2,'다른 구성원',30)")
+    db.execute("INSERT INTO members(id,household_id,name,age) VALUES(99,2,'다른 구성원',30)")
     db.commit()
     account = create_account(db, 'owner', 'test-password-123', 1)
     token = login(db, 'owner', 'test-password-123', 1)

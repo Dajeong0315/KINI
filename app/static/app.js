@@ -5,9 +5,11 @@
     $ = (q, r = document) => r.querySelector(q);
   const views = [...document.querySelectorAll("[data-view]")];
   const intakeDraft = {};
+  const publicRecipes = { status: "idle", page: null, offset: 0 };
   const screenNames = { home: "홈", inventory: "식재료", recommend: "메뉴 추천", report: "영양 관리", profile: "가족 관리" };
   const inventoryView = { query: "", filter: "all", page: 1 };
-  let fieldId = 0, busy = false,
+  const mealLabels = { breakfast: "아침", lunch: "점심", dinner: "저녁", snack: "간식" };
+  let fieldId = 0, busy = false, restoringSession = true,
     errorMessage = "",
     errorStatus = 0,
     current = "home",
@@ -135,19 +137,23 @@
         ),
       );
   }
-  function nutrition(root, n) {
+  const reportNutrients = [
+    ["energy_kcal", "열량", "kcal"],
+    ["protein_g", "단백질", "g"],
+    ["carbohydrate_g", "탄수화물", "g"],
+    ["fat_g", "지방", "g"],
+    ["sodium_mg", "나트륨", "mg"],
+  ];
+  const mainNutrients = reportNutrients.filter(([key]) => ["energy_kcal", "protein_g", "sodium_mg"].includes(key));
+  function nutrition(root, n, metrics = mainNutrients, format = (amount, unit) => `${amount} ${unit}`) {
     if (!n) {
       root.append(note("영양 정보 미제공"));
       return;
     }
     const grid = node("dl", undefined, "nutrient-grid");
-    for (const [k, label, unit] of [
-      ["energy_kcal", "열량", "kcal"],
-      ["protein_g", "단백질", "g"],
-      ["sodium_mg", "나트륨", "mg"],
-    ]) {
+    for (const [k, label, unit] of metrics) {
       const metric = node("div");
-      metric.append(node("dt", label), node("dd", n[k] == null ? "미제공" : `${n[k]} ${unit}`));
+      metric.append(node("dt", label), node("dd", n[k] == null ? "미제공" : format(n[k], unit)));
       grid.append(metric);
     }
     root.append(grid);
@@ -193,7 +199,9 @@
     $("#main-content").focus({ preventScroll: true });
     window.scrollTo({ top: 0 });
     if (name === "inventory" && s.session) run(() => api.inventory());
-    if (name === "report" && s.session) run(() => reloadReports());
+    if (next === "home" && s.session) refreshRecentMeals();
+    if (next === "report" && s.session && !busy) refreshNutritionReport();
+    if (next === "recommend" && s.session && publicRecipes.status === "idle") loadPublicRecipes();
   }
   function loginView(root) {
     heading(
@@ -239,11 +247,19 @@
         } finally {
           password.input.value = "";
         }
-        await Promise.all([api.inventory(), api.refreshData()]);
-        if (current === "report") await reloadReports();
+        await loadSignedInData();
       });
     };
     p.append(form);
+  }
+  async function loadSignedInData() {
+    const initialLoads = [api.inventory(), api.refreshData()];
+    if (current === "home") initialLoads.push(api.loadRecentMeals());
+    if (current === "report") initialLoads.push(reloadReports());
+    if (current === "recommend" && publicRecipes.status === "idle") initialLoads.push(loadPublicRecipes());
+    for (const result of await Promise.allSettled(initialLoads)) {
+      if (result.status === "rejected") throw result.reason;
+    }
   }
   function selectedRecipe() {
     return s.result?.status === "recommendations_available"
@@ -317,11 +333,18 @@
       return;
     }
     const stock = s.inventory.items.filter(item => item.quantity_g !== 0);
+    if (!stock.length) {
+      root.append(connectionState("empty", "보유 중인 식재료가 없어요."));
+      return;
+    }
     const soon = stock.filter(item => expiryKind(item.expiry_date) === "soon");
     const expired = stock.filter(item => expiryKind(item.expiry_date) === "expired");
     const undated = stock.filter(item => expiryKind(item.expiry_date) === "undated");
     const counts = node("div", undefined, "quality-labels");
-    counts.append(badge(`임박 ${soon.length}개`, soon.length ? "warning" : "neutral"), badge(`기한 지남 ${expired.length}개`, expired.length ? "danger" : "neutral"));
+    if (undated.length !== stock.length)
+      counts.append(badge(`3일 내 임박 ${soon.length}개`, soon.length ? "warning" : "neutral"), badge(`기한 지남 ${expired.length}개`, expired.length ? "danger" : "neutral"));
+    if (undated.length)
+      counts.append(badge(`소비기한 미등록 ${undated.length}개`));
     root.append(counts);
     const due = [...expired, ...soon].sort((a, b) => a.expiry_date.localeCompare(b.expiry_date));
     if (due.length) {
@@ -332,23 +355,59 @@
         rows.append(row);
       }
       root.append(rows);
-    } else if (!stock.length) {
-      root.append(connectionState("empty", "보유 중인 식재료가 없어요."));
     } else if (stock.length === undated.length) {
       root.append(connectionState("insufficient", "소비기한을 등록한 식재료가 없어요."));
     } else {
       root.append(note("등록된 기한 중 임박하거나 지난 식재료가 없어요."));
     }
-    root.append(note(`오늘부터 3일 이내를 임박으로 표시해요.${undated.length ? ` · 기한 미등록 ${undated.length}개` : ""}`));
+    root.append(note("오늘부터 3일 이내를 임박으로 표시해요."));
+  }
+  function refreshRecentMeals() {
+    return run(() => {
+      const pending = api.loadRecentMeals();
+      render();
+      return pending;
+    });
+  }
+  function recentMeals(root) {
+    const card = panel(root, "최근 식사 기록");
+    const { status, records } = s.recentMeals;
+    if (status === "error") {
+      card.append(
+        connectionState("error", "저장된 식사 기록을 불러오지 못했어요."),
+        button("식사 기록 다시 불러오기", refreshRecentMeals),
+      );
+      return;
+    }
+    if (status !== "ready") {
+      card.append(connectionState("loading", "저장된 식사 기록을 확인하고 있어요."));
+      return;
+    }
+    if (!records.length) {
+      card.append(connectionState("empty", "최근 7일간 저장된 식사 기록이 없어요."));
+      return;
+    }
+    mealList(card, records);
+  }
+  function mealList(root, records, showNutrition = false) {
+    const list = node("ul", undefined, "receipts");
+    for (const record of records) {
+      const row = node("li");
+      const summary = node("div");
+      const when = [record.meal_date, mealLabels[record.meal_type]].filter(Boolean).join(" · ");
+      summary.append(node("h3", record.recipe_name || "식사"), note(when));
+      for (const item of record.items) {
+        const amount = item.servings == null ? "섭취량 미기록" : `${item.servings}인분`;
+        summary.append(note(`${item.member_name} · ${amount}`));
+      }
+      row.append(summary, button("식후 평가", () => feedbackDialog(record)));
+      if (showNutrition) nutrition(row, record.nutrition_totals, reportNutrients);
+      list.append(row);
+    }
+    root.append(list);
   }
   function home(root) {
     heading(root, "오늘은 무엇을 먹을까요?", "식사할 가족을 선택하고 냉장고 상태를 확인해 보세요.");
-    // The question area stays hidden until the server supplies a question.
-    const questions = node("section", undefined, "question-card");
-    questions.hidden = true;
-    questions.dataset.status = "pending";
-    questions.append(node("h2", "KINI가 궁금해요"), connectionState("pending", "질문을 받으면 여기에 표시합니다."));
-    root.append(questions);
 
     const grid = node("div", undefined, "grid-two home-summary");
     root.append(grid);
@@ -374,6 +433,7 @@
       }
       openDialog("맞춤 구매 제안", connectionState("pending", "구매 제안 서버가 연동되면 품목별로 확인할 수 있어요."), details);
     }));
+    recentMeals(root);
   }
   function requestRecommendation(more) {
     return run(() => {
@@ -428,6 +488,98 @@
     picker.append(options);
     root.append(results);
     recommendationResult(results);
+    publicRecipeSection(root);
+  }
+
+  async function loadPublicRecipes(offset = 0) {
+    if (publicRecipes.status === "loading") return;
+    publicRecipes.status = "loading";
+    publicRecipes.offset = offset;
+    if (current === "recommend" && !busy) render();
+    try {
+      publicRecipes.page = await api.publicRecipes(offset);
+      publicRecipes.status = "ready";
+    } catch {
+      publicRecipes.status = "error";
+    }
+    if (current === "recommend" && !busy) render();
+  }
+
+  function publicRecipeSection(root) {
+    const card = panel(root, "식약처 레시피");
+    const { status, page, offset } = publicRecipes;
+    card.append(note("재료와 조리법을 둘러볼 수 있어요. 재고·알레르기 조건은 조리 전에 직접 확인해 주세요."));
+    if (status === "idle" || status === "loading") {
+      card.append(connectionState("loading", "레시피를 불러오고 있어요."));
+    } else if (status === "error") {
+      card.append(connectionState("error", "레시피 목록을 불러오지 못했어요."),
+        button("레시피 다시 불러오기", () => loadPublicRecipes(offset)));
+    } else if (!page.items.length) {
+      card.append(connectionState("empty", "현재 표시할 식약처 레시피가 없어요."));
+    } else {
+      const list = node("ul", undefined, "receipts");
+      for (const item of page.items) {
+        const row = node("li");
+        const preview = node("div", undefined, "public-recipe-preview");
+        appendRecipePhoto(preview, item);
+        preview.append(node("h3", item.name));
+        const detail = button("조리법 보기", () => showPublicRecipe(item.external_id));
+        detail.setAttribute("aria-label", `${item.name} 조리법 보기`);
+        row.append(preview, detail);
+        list.append(row);
+      }
+      card.append(list);
+      if (offset || page.has_more) {
+        const pages = node("div", undefined, "button-row");
+        const previous = button("이전 레시피", () => loadPublicRecipes(Math.max(0, offset - page.limit)));
+        const next = button("다음 레시피", () => loadPublicRecipes(offset + page.limit));
+        previous.disabled = busy || !offset;
+        next.disabled = busy || !page.has_more;
+        pages.append(previous, next);
+        card.append(pages);
+      }
+    }
+  }
+
+  function showPublicRecipe(id) {
+    return run(async () => {
+      const { item } = await api.publicRecipe(id);
+      const content = node("div", undefined, "recipe-detail");
+      appendRecipePhoto(content, item, true);
+      content.append(node("h3", "영양 정보"));
+      publicRecipeNutrition(content, item.nutrition);
+      const steps = node("ol");
+      for (const step of item.steps) steps.append(node("li", step));
+      content.append(node("h3", "재료"), note(item.ingredients_text), node("h3", "조리 순서"), steps);
+      openDialog(item.name, content);
+    });
+  }
+
+  function appendRecipePhoto(root, item, detail = false) {
+    if (!item.image_url) return;
+    const photo = node("img", undefined, detail ? "public-recipe-photo" : "public-recipe-thumbnail");
+    photo.alt = detail ? `${item.name} 완성 사진` : "";
+    photo.decoding = "async";
+    photo.referrerPolicy = "no-referrer";
+    if (!detail) photo.loading = "lazy";
+    photo.onerror = () => photo.remove();
+    photo.src = item.image_url;
+    root.append(photo);
+  }
+
+  function publicRecipeNutrition(root, nutrients) {
+    const rows = Object.entries(nutrients);
+    if (!rows.length) {
+      nutrition(root, null);
+      return;
+    }
+    const basis = ({ basis_amount, basis_unit }) =>
+      `${basis_amount}${basis_unit === "serving" ? "인분" : ` ${basis_unit}`} 기준`;
+    const bases = new Set(rows.map(([, row]) => basis(row)));
+    const sharedBasis = bases.size === 1;
+    root.append(note(sharedBasis ? `식약처 제공 · ${basis(rows[0][1])}` : "식약처 제공"));
+    nutrition(root, nutrients, reportNutrients, (row, unit) =>
+      sharedBasis ? `${row.amount} ${unit}` : `${row.amount} ${unit} · ${basis(row)}`);
   }
 
   function recommendationResult(root) {
@@ -495,11 +647,7 @@
       p.append(
         note(`${i.ingredient}: 필요 ${i.needed_g}g / 보유 ${i.available_g}g`),
       );
-    p.append(
-      note(
-        "이번 식사에 필요한 재료량입니다. 조리 중 재료를 변경하면 총 조리량을 다시 확인할 수 있어요.",
-      ),
-    );
+    p.append(note("이번 식사에 필요한 재료량입니다. 조리 중 재료를 변경하면 총 조리량을 다시 확인할 수 있어요."));
     nutrition(p, r.nutrition_per_serving);
     for (const advice of r.cooking_guidance || []) p.append(note(advice.message));
     quality(p, r);
@@ -526,11 +674,7 @@
   }
   function cook(root) {
     const c = s.cooking;
-    heading(
-      root,
-      "조리 기록",
-      "이번에 조리할 재료와 총 사용량을 확인하세요.",
-    );
+    heading(root, "조리 기록", "이번에 조리할 재료와 총 사용량을 확인하세요.");
     if (!c) {
       root.append(
         note("진행 중인 조리가 없습니다."),
@@ -543,9 +687,10 @@
       root,
       r?.recipe_id === c.recipe_id ? r.name : `조리 세션 ${c.id}`,
     );
-    p.append(badge(c.planned_servings == null ? "계획 인분 미제공" : `계획 ${c.planned_servings}인분`, "positive"), note("서버 계산 1인분 영양"));
+    p.append(badge(c.planned_servings == null ? "계획 인분 미제공" : `계획 ${c.planned_servings}인분`, "positive"));
     quality(p, c);
     for (const advice of r?.cooking_guidance || []) p.append(note(advice.message));
+    p.append(note("서버 계산 1인분 영양"));
     nutrition(p, c.nutrition_per_serving);
     p.append(node("h3", "이번 조리에 사용할 총량"));
     for (const i of c.ingredients)
@@ -572,16 +717,9 @@
         run(() => api.changeIngredient(name.input.value, qty.input.value));
       };
       if (s.outflows?.started)
-        p.append(
-          note(
-            "출고를 시작해 재료 변경이 잠겼습니다. 섭취량 기록 화면에서 이어서 진행하세요.",
-          ),
-        );
+        p.append(note("출고를 시작해 재료 변경이 잠겼습니다. 섭취량 기록 화면에서 이어서 진행하세요."));
       else
-        p.append(
-          form,
-          note("최종 재료를 확인한 뒤 재고 출고와 섭취 기록으로 진행합니다."),
-        );
+        p.append(form, note("최종 재료를 확인한 뒤 재고 출고와 섭취 기록으로 진행합니다."));
       const question = field("조리 질문"),
         answer = node("div", undefined, "ai-answer"),
         qform = node("form"),
@@ -600,20 +738,16 @@
       const help = node("details", undefined, "options");
       help.open = !!lastAnswer;
       help.append(node("summary", "조리 도움말"), qform, answer);
-      const deferredRecord = button("조리만 기록하기", () => openDialog("조리만 기록하기", connectionState("pending", "조리 기록과 실제 식사 확인을 따로 저장하는 기능은 연동 예정이에요.")));
       p.append(
         help,
-        deferredRecord,
+        button("조리만 기록하기", () => openDialog("조리만 기록하기",
+          connectionState("pending", "조리 기록과 실제 식사 확인을 따로 저장하는 기능은 연동 예정이에요."))),
         button("조리 완료 · 섭취량 확인", () => go("record"), "primary"),
       );
     } else p.append(button("저장 확인 보기", () => go("report")));
   }
   function record(root) {
-    heading(
-      root,
-      "실제 섭취량 기록",
-      "변경된 조리 세션을 기준으로 서버에 저장합니다.",
-    );
+    heading(root, "실제 섭취량 기록", "변경된 조리 세션을 기준으로 서버에 저장합니다.");
     if (!active()) {
       root.append(
         note(
@@ -625,7 +759,9 @@
       return;
     }
     const p = panel(root, "사용량과 섭취량 확인");
-    p.append(badge(s.cooking.planned_servings == null ? "계획 인분 미제공" : `계획 ${s.cooking.planned_servings}인분`, "positive"), node("h3", "이번 조리에 사용한 총량"));
+    const planned = s.cooking.planned_servings;
+    p.append(badge(planned == null ? "계획 인분 미제공" : `계획 ${planned}인분`, "positive"),
+      node("h3", "이번 조리에 사용한 총량"));
     for (const i of s.cooking.ingredients)
       p.append(
         note(
@@ -638,11 +774,7 @@
     const stock = panel(root, "재료 출고 확인");
     const batch = s.outflows;
     if (!batch?.started) {
-      stock.append(
-        note(
-          "이미 확정된 출고가 있으면 아래 식사 기록에 ID를 입력하세요. 해당 재료를 다시 출고하지 마세요.",
-        ),
-      );
+      stock.append(note("이미 확정된 출고가 있으면 아래 식사 기록에 ID를 입력하세요. 해당 재료를 다시 출고하지 마세요."));
       stock.append(
         button("수동 출고량 확인", () =>
           run(() => {
@@ -684,10 +816,7 @@
             "primary",
           ),
         );
-      } else
-        stock.append(
-          node("p", "출고가 재고에 반영됐습니다. 이제 섭취량을 저장하세요."),
-        );
+      } else stock.append(note("출고가 재고에 반영됐습니다. 이제 섭취량을 저장하세요."));
     }
     const intake = panel(root, "구성원별 섭취량");
     const form = node("form"),
@@ -740,11 +869,13 @@
             .filter(Boolean)
             .map((id) => (/^\d+$/.test(id) ? Number(id) : NaN)),
         );
+        reportMember = "all";
+        const reportLoad = reloadReports();
         go("report");
-        await Promise.all([api.inventory(), reloadReports()]);
+        await Promise.all([reportLoad, api.inventory()]);
         if (s.data?.feedbackEnabled) {
           feedbackWindow("식사 기록 저장 완료", note("이 식사에 대한 평가를 남길까요? 참여자 중 누구나 한 번 평가할 수 있고 나중에 수정할 수 있습니다."),
-            button("평가하기", () => run(() => feedbackDialog({ record_id: saved.record_id })), "primary"),
+            button("평가하기", () => feedbackDialog({ record_id: saved.record_id }), "primary"),
             button("평가 건너뛰기", closeDialog));
         }
       });
@@ -887,6 +1018,7 @@
       return;
     }
     const items = s.inventory.items.filter((item) =>
+      item.quantity_g !== 0 &&
       item.name.toLocaleLowerCase("ko-KR").includes(inventoryView.query.trim().toLocaleLowerCase("ko-KR")) &&
       (inventoryView.filter === "all" || item.category === inventoryView.filter),
     );
@@ -989,7 +1121,8 @@
     };
     toolbar.append(search.wrap, categories);
     card.append(toolbar);
-    if (!available.length && s.inventory?.items.length) card.append(note("분류 정보는 연동 예정이에요. 재료 이름으로 검색할 수 있습니다."));
+    if (!available.length && s.inventory?.items.length)
+      card.append(note("분류 정보는 연동 예정이에요. 재료 이름으로 검색할 수 있습니다."));
     card.append(list);
     stockRows(list);
     const actions = node("div", undefined, "button-row");
@@ -1010,33 +1143,238 @@
       openDialog("영양 조회", content);
     });
   }
-  function feedbackPreview(receipt) {
-    const group = node("div", undefined, "feedback-preview");
-    const names = receipt.items.map(item => s.household.members.find(member => member.id === item.member_id)?.name).filter(Boolean);
-    for (const [label, choices] of [
-      ["맛", ["별로예요", "보통이에요", "맛있어요"]],
-      ["간", ["싱거워요", "적당해요", "짜요"]],
-      ["난이도", ["쉬웠어요", "보통이에요", "어려웠어요"]],
-    ]) {
-      const row = node("section");
-      const actions = node("div", undefined, "button-row");
-      for (const value of [...choices, "이 항목 건너뛰기"]) {
-        const option = button(value, () => {});
-        option.disabled = true;
-        actions.append(option);
-      }
-      row.append(node("h3", label), actions);
-      group.append(row);
+  async function accountFeedbackDialog(receipt) {
+    openDialog("식후 평가", connectionState("loading", "저장된 평가를 확인하고 있어요."));
+    let result;
+    await run(async () => { result = await api.mealFeedback(receipt.record_id); });
+    if (!$("#scenario-dialog").open || !s.session) return;
+    const body = $("#dialog-body");
+    if (!result) {
+      body.replaceChildren(button("평가 다시 불러오기", () => feedbackDialog(receipt)));
+      return;
     }
+
+    const names = receipt.items.map(item => item.member_name).filter(Boolean);
+    const form = node("form", undefined, "meal-feedback-form");
+    const canSave = s.session.role !== "viewer";
+    const fields = [
+      ["taste", "맛", [["bad", "별로예요"], ["okay", "보통이에요"], ["good", "맛있어요"]]],
+      ["salt", "간", [["bland", "싱거워요"], ["balanced", "적당해요"], ["salty", "짜요"]]],
+      ["difficulty", "난이도", [["easy", "쉬웠어요"], ["normal", "보통이에요"], ["hard", "어려웠어요"]]],
+    ];
+    const values = Object.fromEntries(fields.map(([key]) => [key, result.feedback?.[key] ?? null]));
+    const status = note(result.feedback ? "저장된 내 평가입니다." : "");
+    status.setAttribute("role", "status");
     const actions = node("div", undefined, "dialog-actions");
-    for (const label of ["나중에 평가", "평가 건너뛰기", "평가 저장"]) {
-      const control = button(label, () => {});
-      control.disabled = true;
-      actions.append(control);
+    const close = button(canSave && !result.feedback ? "평가 건너뛰기" : "닫기", closeDialog);
+    const save = button("평가 저장", () => {}, "primary");
+    save.type = "submit";
+    const updateSave = () => { save.disabled = !canSave || !Object.values(values).some(Boolean); };
+    updateSave();
+    for (const [key, label, choices] of fields) {
+      const section = node("section");
+      section.setAttribute("role", "group");
+      section.setAttribute("aria-label", label);
+      const options = node("div", undefined, "button-row");
+      for (const [value, text] of [...choices, [null, "이 항목 건너뛰기"]]) {
+        const option = button(text, () => {
+          values[key] = value;
+          for (const choice of options.children)
+            choice.setAttribute("aria-pressed", String(choice === option));
+          status.textContent = "";
+          updateSave();
+        }, "filter");
+        option.setAttribute("aria-pressed", String(values[key] === value));
+        option.disabled = !canSave;
+        options.append(option);
+      }
+      section.append(node("h3", label), options);
+      form.append(section);
     }
-    openDialog("식후 평가", note(`평가 대상 · ${receipt.name || "식사"} / ${names.join(", ") || "식사 구성원 미확인"}`),
-      note("평가자는 저장 시 별도로 확인합니다."),
-      connectionState("pending", "평가 저장과 다음 추천 반영은 서버 연동 후 제공돼요."), group, actions);
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      if (save.disabled) return;
+      run(async () => {
+        await api.mealFeedback(receipt.record_id, values);
+        status.textContent = "평가를 저장했어요.";
+        close.textContent = "닫기";
+      });
+    };
+    actions.append(close, save);
+    form.append(status, actions);
+    const meal = receipt.recipe_name || "식사";
+    body.replaceChildren(note(`평가 대상 · ${meal}${names.length ? ` / ${names.join(", ")}` : ""}`), form);
+    (canSave ? form.querySelector("button") : close).focus();
+  }
+  function refreshNutritionReport() {
+    return run(() => {
+      return reloadReports();
+    });
+  }
+  function reportNutritionRows(root, totals) {
+    const metrics = node("dl", undefined, "nutrition-rows");
+    for (const [key, label] of [
+      ["carbohydrate_g", "탄수화물"],
+      ["protein_g", "단백질"],
+      ["fat_g", "지방"],
+      ["fiber_g", "식이섬유"],
+    ]) {
+      const row = node("div", undefined, "nutrition-row");
+      const track = node("span", undefined, "nutrition-track");
+      track.setAttribute("aria-hidden", "true");
+      const value = totals ? (totals[key] == null ? "미제공" : `${totals[key]} g`) : "—";
+      row.append(node("dt", label), track, node("dd", value));
+      metrics.append(row);
+    }
+    root.append(metrics);
+  }
+  const balanceLabels = {
+    met: ["적정", "positive"],
+    below: ["부족", "warning"],
+    caution: ["주의", "danger"],
+    partial: ["기록 더 필요"],
+    no_target: ["기준 미설정"],
+    no_records: ["기록 없음"],
+    unavailable: ["미제공"],
+  };
+  const balanceMetrics = [...reportNutrients, ["fiber_g", "식이섬유", "g"]];
+
+  function selectReportMember(memberId) {
+    if (reportMember === memberId) return;
+    reportMember = memberId;
+    refreshNutritionReport();
+  }
+
+  function familyBalance(root, summary) {
+    const recorded = summary.members.filter(member => member.meal_record_count > 0).length;
+    root.append(note(`${summary.start_date} ~ ${summary.end_date} · ${summary.members.length}명 중 ${recorded}명 식사 기록`));
+    if (!summary.members.length) {
+      root.append(connectionState("empty", "등록된 가족 구성원이 없어요."));
+      return;
+    }
+    const scroll = node("div", undefined, "family-balance-scroll");
+    scroll.tabIndex = 0;
+    scroll.setAttribute("role", "region");
+    scroll.setAttribute("aria-label", "구성원별 영양 상태 표");
+    const table = node("table", undefined, "family-balance");
+    const thead = node("thead"), header = node("tr"), tbody = node("tbody");
+    const nutrient = node("th", "영양소");
+    nutrient.scope = "col";
+    header.append(nutrient);
+    for (const member of summary.members) {
+      const th = node("th");
+      th.scope = "col";
+      const recordedMeals = member.meal_record_count ? `기록 ${member.meal_record_count}끼` : "기록 없음";
+      const comparedDays = member.complete_day_count ? ` · 비교 ${member.complete_day_count}일` : "";
+      th.append(button(member.member_name, () => selectReportMember(member.member_id), "text-button"),
+        note(recordedMeals + comparedDays));
+      header.append(th);
+    }
+    thead.append(header);
+    for (const [key, label, unit] of balanceMetrics) {
+      const row = node("tr"), th = node("th", label);
+      th.scope = "row";
+      row.append(th);
+      for (const member of summary.members) {
+        const cell = node("td");
+        const state = member.nutrition_balance?.[key] || (member.meal_record_count ? "partial" : "no_records");
+        cell.append(badge(...(balanceLabels[state] || balanceLabels.partial)));
+        const amount = member.nutrition_totals[key];
+        if (member.meal_record_count && amount != null) cell.append(note(`${amount} ${unit}`));
+        row.append(cell);
+      }
+      tbody.append(row);
+    }
+    table.append(thead, tbody);
+    scroll.append(table);
+    root.append(scroll, note("수치는 최근 7일 기록 합계예요. 목표 비교는 아침·점심·저녁이 모두 기록된 날을 기준으로 하고, 나트륨은 확인된 한 끼 또는 하루 기준 초과도 표시해요."));
+  }
+
+  function familyMenu(root) {
+    const card = panel(root, "가족 맞춤 영양 보완 메뉴");
+    const memberIds = s.household.members.map(member => member.id);
+    const result = s.result;
+    const sameFamily = result?.participant_ids?.length === memberIds.length &&
+      memberIds.every(id => result.participant_ids.includes(id));
+    const candidate = sameFamily && result.status === "recommendations_available" && result.recommendations[0];
+    if (candidate) {
+      card.append(node("h3", candidate.name));
+      if (candidate.data_quality === "demo_data") card.append(badge("예시 데이터"));
+      const { protein_g, sodium_mg } = candidate.nutrition_per_serving;
+      card.append(note(`1인분 단백질 ${protein_g} g · 나트륨 ${sodium_mg} mg`));
+    } else if (sameFamily && result.status === "no_safe_recommendation") {
+      card.append(note("현재 가족 조건과 보유 재료를 모두 충족하는 메뉴가 없어요."));
+    } else {
+      card.append(note("가족의 식단 조건과 보유 재료로 만들 수 있는 메뉴를 찾아보세요."));
+    }
+    const suggest = button(candidate ? "가족 맞춤 메뉴 더보기" : "가족 맞춤 메뉴 찾기", () => {
+      api.selectMembers(memberIds);
+      go("recommend");
+      requestRecommendation(false);
+    }, "primary family-menu-action");
+    suggest.disabled = busy || active() || !memberIds.length;
+    card.append(suggest);
+  }
+
+  function familyMealCaption(record) {
+    const [, month, day] = record.meal_date?.split("-") || [];
+    const date = month && day ? `${Number(month)}월 ${Number(day)}일` : "";
+    const names = [...new Set(record.items.filter(item => item.servings !== 0).map(item => item.member_name))];
+    return [date, mealLabels[record.meal_type], names.join(", ")].filter(Boolean).join(" · ");
+  }
+
+  function showFamilyMeal(record) {
+    const detail = node("div", undefined, "recipe-detail");
+    detail.append(note(familyMealCaption(record)));
+    for (const item of record.items) {
+      const serving = item.servings == null ? "섭취량 미기록" : `${item.servings}인분`;
+      detail.append(note(`${item.member_name} · ${serving}`));
+    }
+    detail.append(node("h3", "기록된 영양 합계"));
+    nutrition(detail, record.nutrition_totals, reportNutrients);
+    detail.append(button("식후 평가", () => feedbackDialog(record)));
+    openDialog(record.recipe_name || "식사", detail);
+  }
+
+  function familyReport(root, status, summary, history) {
+    const chart = panel(root, "우리 가족 영양 밸런스");
+    if (status !== "ready") {
+      chart.append(connectionState("loading", "저장된 영양 기록을 불러오고 있어요."));
+    } else if (!summary) {
+      chart.append(connectionState("error", "저장된 영양 기록을 불러오지 못했어요."),
+        button("영양 기록 다시 불러오기", refreshNutritionReport));
+    } else {
+      familyBalance(chart, summary);
+      if (summary.excluded_invalid_timestamp_count)
+        chart.append(note(`날짜를 확인할 수 없는 식사 ${summary.excluded_invalid_timestamp_count}건은 집계에서 제외했어요.`));
+    }
+    familyMenu(root);
+    const meals = panel(root, "최근 가족 식사 기록");
+    if (status !== "ready") {
+      meals.append(connectionState("loading", "저장된 식사 기록을 불러오고 있어요."));
+    } else if (!history) {
+      meals.append(connectionState("error", "저장된 식사 기록을 불러오지 못했어요."),
+        button("식사 기록 다시 불러오기", refreshNutritionReport));
+    } else if (!history.records.length) {
+      meals.append(connectionState("empty", "최근 7일간 저장된 식사 기록이 없어요."));
+    } else {
+      const list = node("ul", undefined, "family-meals");
+      for (const record of history.records) {
+        const row = node("li");
+        const action = button(undefined, () => showFamilyMeal(record), "text-button family-meal-button");
+        const text = node("span", undefined, "family-meal-copy");
+        const arrow = node("span", "›", "family-meal-arrow");
+        arrow.setAttribute("aria-hidden", "true");
+        action.dataset.recordId = String(record.record_id);
+        action.setAttribute("aria-haspopup", "dialog");
+        text.append(node("strong", record.recipe_name || "식사"), node("span", familyMealCaption(record), "data-note"));
+        action.append(text, arrow);
+        row.append(action);
+        list.append(row);
+      }
+      meals.append(list);
+      if (history.has_more) meals.append(note(`최근 식사 ${history.records.length}건을 표시해요.`));
+    }
   }
   function feedbackWindow(title, ...children) {
     openDialog(title, ...children);
@@ -1044,8 +1382,11 @@
     // not in run()'s original control list and must become usable on arrival.
     for (const control of $("#dialog-body").querySelectorAll("button")) control.disabled = false;
   }
-  async function feedbackDialog(receipt) {
-    if (!s.data?.feedbackEnabled) return feedbackPreview(receipt);
+  function feedbackDialog(receipt) {
+    if (s.data?.feedbackEnabled) return run(() => sharedFeedbackDialog(receipt));
+    return accountFeedbackDialog(receipt);
+  }
+  async function sharedFeedbackDialog(receipt) {
     const detail = await api.mealDetail(receipt.record_id);
     const participants = detail.participants || [];
     if (!participants.length) throw Error("식사 참여자를 확인할 수 없습니다.");
@@ -1090,7 +1431,7 @@
         note(`평가 버전 ${result.revision}`), button("닫기", closeDialog));
     }), "primary");
     panel.append(save, button(existing.revision > 0 ? "닫기 · 기존 평가 유지" : "평가 건너뛰기", closeDialog),
-      button("최신 평가 다시 불러오기", () => run(() => feedbackDialog(receipt))));
+      button("최신 평가 다시 불러오기", () => feedbackDialog(receipt)));
     feedbackWindow(existing.status === "submitted" ? "식후 평가 수정" : "식후 평가", panel);
   }
   function reportParams(offset = 0) {
@@ -1100,20 +1441,6 @@
     const pending = api.loadReports(reportParams(offset));
     render();
     return pending;
-  }
-  async function openMealDetail(recordId) {
-    const detail = await api.mealDetail(recordId);
-    const content = node("div");
-    content.append(note(`${detail.meal_date || "날짜 미확인"} · ${detail.meal_type || "식사"} · 기록 ID ${detail.record_id}`),
-      note("저장된 개인별 실제 섭취량과 당시 영양 스냅샷입니다."));
-    for (const item of detail.items || []) {
-      const person = node("section", undefined, "scenario-log");
-      person.append(node("h3", `${item.member_name || "구성원"} · ${item.servings ?? "미확인"}인분`));
-      nutrition(person, item.nutrition);
-      if (item.data_quality === "incomplete") person.append(note("누락된 영양값은 0으로 계산하지 않습니다."));
-      content.append(person);
-    }
-    openDialog(detail.recipe_name || "식사 기록 상세", content);
   }
   function report(root) {
     heading(root, "영양 관리", "가족 구성원별 영양과 조리·식사 기록을 확인하세요.");
@@ -1151,91 +1478,183 @@
     const storedReport = s.nutritionReport;
     root.append(note(`${storedReport.start_date} ~ ${storedReport.end_date} · 한국 시간 · 저장된 섭취 기록 기준`));
     const person = s.household.members.find(member => member.id === reportMember);
-    const chart = panel(root, person ? `${person.name}의 최근 영양 현황` : "가족 영양 현황");
-    chart.append(note(`식사 기록 ${storedReport.meal_record_count}건 · 실제 섭취 ${storedReport.total_servings ?? "미확인"}인분`));
-    nutrition(chart, storedReport.nutrition_totals);
-    chart.append(note(`탄수화물 ${storedReport.nutrition_totals.carbohydrate_g ?? "미제공"} g · 지방 ${storedReport.nutrition_totals.fat_g ?? "미제공"} g`));
-    if (storedReport.data_quality === "incomplete") chart.append(note("누락된 항목이 있습니다. 미제공 값을 0으로 간주하지 않습니다."));
-    if (storedReport.data_quality === "empty") chart.append(connectionState("empty", "이 기간에 저장된 식사 기록이 없습니다."));
+    const status = s.reportsStatus, summary = storedReport, history = s.history;
+    if (!person) {
+      familyReport(root, status, summary, history);
+      if (history.offset > 0 || history.has_more) appendHistoryPages(root, history);
+      return;
+    }
+    const chart = panel(root, `${person.name}의 최근 영양 현황`);
+    if (summary) chart.append(note(`${summary.start_date} ~ ${summary.end_date} · 실제 섭취량 기준`));
+    const totals = summary?.meal_record_count ? summary.nutrition_totals : null;
+    reportNutritionRows(chart, totals);
+    if (status !== "ready") {
+      chart.append(connectionState("loading", "저장된 영양 기록을 불러오고 있어요."));
+    } else if (!summary) {
+      chart.append(connectionState("error", "저장된 영양 기록을 불러오지 못했어요."),
+        button("영양 기록 다시 불러오기", refreshNutritionReport));
+    } else if (!totals) {
+      chart.append(connectionState("empty", "최근 7일간 저장된 식사 기록이 없어요."));
+    } else {
+      const energy = totals.energy_kcal == null ? "미제공" : `${totals.energy_kcal} kcal`;
+      const sodium = totals.sodium_mg == null ? "미제공" : `${totals.sodium_mg} mg`;
+      chart.append(note(`열량 ${energy} · 나트륨 ${sodium} · 저장된 식사 ${summary.meal_record_count}건`));
+      if (Object.values(totals).includes(null))
+        chart.append(note("일부 기록의 영양 정보가 누락되어 해당 합계를 표시할 수 없어요."));
+    }
+    if (summary?.excluded_invalid_timestamp_count)
+      chart.append(note(`날짜를 확인할 수 없는 식사 ${summary.excluded_invalid_timestamp_count}건은 집계에서 제외했어요.`));
+
     const bottom = node("div", undefined, "grid-two nutrition-bottom");
     root.append(bottom);
     const supplement = panel(bottom, "보완이 필요한 영양소");
-    supplement.append(connectionState("pending", "영양 분석이 연결되면 보완 영양소와 메뉴를 확인할 수 있어요."));
-    const suggestion = button("보완 메뉴 추천", () => {});
+    supplement.append(connectionState("pending", "섭취량을 권장량과 비교하는 분석은 연동 예정이에요."));
+    const suggestion = button("보완 메뉴 추천");
     suggestion.disabled = true;
     supplement.append(suggestion);
 
-    const p = panel(bottom, "저장된 식사 이력");
-    p.append(note(`전체 ${s.history.total}건 · 현재 페이지 ${s.history.offset + 1}번부터 · 저장된 기록만 표시합니다.`));
-    if (!s.history.records.length) p.append(connectionState("empty", "조회 조건에 해당하는 저장 기록이 없습니다."));
-    for (const r of s.history.records) {
-      const row = node("div", undefined, "scenario-log");
-      row.append(node("h3", `${r.recipe_name || "식사"} · 기록 ID ${r.record_id}`),
-        note(`${r.meal_date || "날짜 미확인"} · ${r.meal_type || "식사"}`), badge("서버 저장 기록", "positive"));
-      for (const item of r.items) {
-        if (reportMember !== "all" && reportMember !== item.member_id) continue;
-        const name = s.household.members.find(member => member.id === item.member_id)?.name || "구성원";
-        row.append(note(`${name} · 입력한 실제 섭취량 ${item.servings}인분`));
-      }
-      row.append(note("선택한 구성원의 저장된 실제 섭취 영양 합계"));
-      nutrition(row, r.nutrition_totals);
-      row.append(button("기록 상세", () => run(() => openMealDetail(r.record_id))));
-      row.append(button("식후 평가", () => run(() => feedbackDialog({ ...r, name: r.recipe_name }))));
-      p.append(row);
+    const meals = panel(bottom, "식사 기록 저장 확인");
+    if (status !== "ready") {
+      meals.append(connectionState("loading", "저장된 식사 기록을 불러오고 있어요."));
+    } else if (!history) {
+      meals.append(connectionState("error", "저장된 식사 기록을 불러오지 못했어요."),
+        button("식사 기록 다시 불러오기", refreshNutritionReport));
+    } else if (!history.records.length) {
+      meals.append(connectionState("empty", "최근 7일간 저장된 식사 기록이 없어요."));
+    } else {
+      if (history.has_more) meals.append(note(`최근 식사 ${history.records.length}건을 표시해요.`));
+      mealList(meals, history.records, true);
     }
+    if (history.offset > 0 || history.has_more) appendHistoryPages(meals, history);
+  }
+  function appendHistoryPages(root, history) {
     const pages = node("div", undefined, "button-row");
-    if (s.history.offset > 0) pages.append(button("이전 기록", () => run(() => reloadReports(Math.max(0, s.history.offset - 20)))));
-    if (s.history.has_more) pages.append(button("다음 기록", () => run(() => reloadReports(s.history.offset + 20))));
-    p.append(pages);
+    if (history.offset > 0) pages.append(button("이전 기록", () => run(() => reloadReports(Math.max(0, history.offset - 20)))));
+    if (history.has_more) pages.append(button("다음 기록", () => run(() => reloadReports(history.offset + 20))));
+    root.append(pages);
+  }
+  const activityLevels = {
+    sedentary: ["비활동적", "대부분 앉아서 지내고, 걷거나 운동하는 시간이 적어요."],
+    low_active: ["저활동적", "주로 앉아서 지내지만, 출퇴근이나 산책으로 꾸준히 걸어요."],
+    active: ["활동적", "평소 많이 걷거나 몸을 움직이는 시간이 길고, 운동도 꾸준히 해요."],
+    very_active: ["매우 활동적", "몸을 많이 쓰는 일을 하거나 강도 높은 훈련을 자주 해요."],
+    "": ["잘 모르겠어요", "평소 활동량을 정하기 어려울 때 고르세요."],
+  };
+  function activityField(selected) {
+    const group = node("fieldset", undefined, "activity-field");
+    const hint = note("평소 일주일을 떠올려 보세요. 출퇴근, 집안일, 업무 중 움직임과 운동을 모두 포함해 주세요.");
+    hint.id = `field-label-${++fieldId}`;
+    group.setAttribute("aria-describedby", hint.id);
+    group.append(node("legend", "평소 활동량 (선택)"), hint);
+    for (const [value, [title, description]] of Object.entries(activityLevels)) {
+      const option = node("label", undefined, "activity-option");
+      const input = node("input");
+      const copy = node("span", undefined, "activity-option-copy");
+      const label = node("strong", title);
+      const detail = node("span", description, "data-note");
+      label.id = `field-label-${++fieldId}`;
+      detail.id = `${label.id}-description`;
+      input.type = "radio";
+      input.name = "activity_level";
+      input.value = value;
+      input.checked = value === (selected ?? "");
+      input.setAttribute("aria-labelledby", label.id);
+      input.setAttribute("aria-describedby", detail.id);
+      copy.append(label, detail);
+      option.append(input, copy);
+      group.append(option);
+    }
+    return group;
+  }
+  function physicalProfileFields(member = {}) {
+    const height = field("키 (cm, 선택)", { type: "number", min: 0.1, max: 300, step: "any", value: member.height_cm ?? "" });
+    const weight = field("몸무게 (kg, 선택)", { type: "number", min: 0.1, max: 700, step: "any", value: member.weight_kg ?? "" });
+    const activity = s.household.activity_level_supported === true ? activityField(member.activity_level) : null;
+    return {
+      fields: activity ? [height.wrap, weight.wrap, activity] : [height.wrap, weight.wrap],
+      values: () => ({
+        height_cm: height.input.value === "" ? null : height.input.valueAsNumber,
+        weight_kg: weight.input.value === "" ? null : weight.input.valueAsNumber,
+        ...(activity && { activity_level: activity.querySelector("input:checked")?.value || null }),
+      }),
+    };
+  }
+  function memberProfileFields(member = {}) {
+    const familyTitle = field("가족 호칭", { value: member.name ?? "" });
+    const age = field("나이", { type: "number", min: 0, max: 130, step: 1, value: member.age ?? "" });
+    const titleHint = node("span", "엄마, 아빠, 첫째처럼 가족 안에서 부르는 호칭을 입력해 주세요.", "data-note");
+    titleHint.id = `${familyTitle.input.getAttribute("aria-labelledby")}-description`;
+    familyTitle.input.setAttribute("aria-describedby", titleHint.id);
+    familyTitle.input.autocomplete = "off";
+    familyTitle.wrap.append(titleHint);
+    const savedDislikes = (member.preferences || []).filter(pref => pref.kind === "dislike").map(pref => pref.value);
+    const allergies = field("알레르기 (쉼표 구분)", { value: (member.allergies || []).join(", ") });
+    const dislikes = field("비선호 음식 (쉼표 구분)", { value: savedDislikes.join(", ") });
+    const physical = physicalProfileFields(member);
+    familyTitle.input.required = age.input.required = true;
+    familyTitle.input.maxLength = 100;
+    const foodValues = input => [...new Set(input.value.split(",").map(value => value.trim()).filter(Boolean))];
+    return {
+      fields: [familyTitle.wrap, age.wrap, allergies.wrap, dislikes.wrap, ...physical.fields],
+      values: () => ({
+        name: familyTitle.input.value.trim(),
+        age: age.input.valueAsNumber,
+        allergies: foodValues(allergies.input),
+        dislikes: foodValues(dislikes.input),
+        ...physical.values(),
+      }),
+    };
+  }
+  function memberProfileForm(submitLabel, member) {
+    const form = node("form");
+    const editor = node("div", undefined, "scenario-controls");
+    const controls = node("div", undefined, "dialog-actions");
+    const profile = memberProfileFields(member);
+    const save = button(submitLabel, () => {}, "primary");
+    save.type = "submit";
+    editor.append(...profile.fields);
+    controls.append(button("닫기", closeDialog), save);
+    form.append(editor, controls);
+    return { form, save, values: profile.values };
   }
   function openMemberForm() {
-    const form = node("form");
-    const name = field("구성원 이름"), age = field("나이", { type: "number", min: 0, max: 130, step: 1 });
-    const allergies = field("알레르기 (쉼표 구분)"), dislikes = field("비선호 음식 (쉼표 구분)");
-    name.input.required = age.input.required = true;
-    name.input.maxLength = 100;
-    const save = button("구성원 추가", () => {}, "primary");
-    save.type = "submit";
-    form.append(name.wrap, age.wrap, allergies.wrap, dislikes.wrap,
-      connectionState("pending", "건강·식단 조건과 선호 음식 입력은 연동 예정이에요."), save);
-    const values = input => [...new Set(input.value.split(",").map(value => value.trim()).filter(Boolean))];
+    const { form, values } = memberProfileForm("구성원 추가");
     form.onsubmit = e => {
       e.preventDefault();
       run(async () => {
-        const member = await api.addMember({
-          name: name.input.value.trim(),
-          age: Number(age.input.value),
-          allergies: values(allergies.input),
-          dislikes: values(dislikes.input),
-        });
+        const member = await api.addMember(values());
         familyMessage = `${member.name} 구성원을 추가했습니다.`;
         closeDialog();
       });
     };
     openDialog("가족 구성원 추가", form);
   }
-  function familyAction(member, remove = false) {
+  function openMemberEdit(member) {
+    const { form, save, values } = memberProfileForm("저장", member);
+    const original = values();
+    const changes = () => Object.fromEntries(Object.entries(values())
+      .filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(original[key])));
+    save.disabled = true;
+    form.oninput = () => { save.disabled = !Object.keys(changes()).length; };
+    form.onsubmit = e => {
+      e.preventDefault();
+      const updatedFields = changes();
+      if (!Object.keys(updatedFields).length) return;
+      run(async () => {
+        const updated = await api.updateMember(member.id, updatedFields);
+        familyMessage = `${updated.name} 구성원의 정보를 저장했습니다.`;
+        closeDialog();
+      });
+    };
+    openDialog("가족 정보 수정", form);
+  }
+  function openMemberRemoval(member) {
     const controls = node("div", undefined, "dialog-actions");
-    const action = button(remove ? "삭제 확인" : "저장", () => {}, "primary");
+    const action = button("삭제 확인", () => {}, "primary");
     action.disabled = true;
     controls.append(button("닫기", closeDialog), action);
-    const editor = node("div", undefined, "scenario-controls");
-    if (!remove) {
-      const dislikes = (member.preferences || []).filter(pref => pref.kind === "dislike").map(pref => pref.value);
-      for (const control of [
-        field("구성원 이름", { value: member.name }),
-        field("나이", { type: "number", value: member.age }),
-        field("알레르기", { value: member.allergies.join(", ") }),
-        field("비선호 음식", { value: dislikes.join(", ") }),
-      ]) {
-        control.input.readOnly = true;
-        editor.append(control.wrap);
-      }
-    }
-    openDialog(remove ? "가족 구성원 삭제 확인" : "가족 정보 수정", remove ? note(`${member.name} 구성원`) : editor,
-      connectionState("pending", remove
-        ? "구성원 삭제 및 기존 기록 보존은 서버 연동 후 제공돼요."
-        : "등록된 알레르기, 건강·식단과 음식 취향 변경은 연동 예정이에요."), controls);
+    openDialog("가족 구성원 삭제 확인", note(`${member.name} 구성원`),
+      connectionState("pending", "구성원 삭제 및 기존 기록 보존은 서버 연동 후 제공돼요."), controls);
   }
   function profile(root) {
     const add = button("+ 구성원 추가", openMemberForm, "primary");
@@ -1254,14 +1673,23 @@
       const preferences = member.preferences || [];
       const constraints = member.constraints || [];
       details.append(
+        node("dt", "키"), node("dd", member.height_cm == null ? "미입력" : `${member.height_cm} cm`),
+        node("dt", "몸무게"), node("dd", member.weight_kg == null ? "미입력" : `${member.weight_kg} kg`),
+      );
+      if (s.household.activity_level_supported === true) {
+        const activityName = activityLevels[member.activity_level]?.[0] || "미설정";
+        details.append(node("dt", "활동량"), node("dd", activityName));
+      }
+      details.append(
         node("dt", "알레르기"), node("dd", member.allergies.join(", ") || "미설정"),
         node("dt", "건강 및 식단"), node("dd", constraints.map(condition => condition.kind === "meal_sodium_max_mg"
           ? `한 끼 나트륨 최대 ${condition.value} mg` : condition.kind === "excluded_ingredient" ? `제외 재료 ${condition.value}` : "설정 있음").join(" · ") || "미설정"),
         node("dt", "음식 취향"), node("dd", preferences.map(option => `${option.kind === "dislike" ? "비선호 " : ""}${preferenceLabels[option.value] || option.value}`).join(" · ") || "미설정"),
       );
       const actions = node("div", undefined, "button-row");
-      const edit = button("정보 수정", () => familyAction(member));
-      const remove = button("삭제", () => familyAction(member, true));
+      const edit = button("정보 수정", () => openMemberEdit(member));
+      edit.disabled = busy || active() || s.session.role === "viewer";
+      const remove = button("삭제", () => openMemberRemoval(member));
       edit.setAttribute("aria-label", `${member.name} 정보 수정`);
       remove.setAttribute("aria-label", `${member.name} 삭제`);
       actions.append(edit, remove);
@@ -1273,20 +1701,10 @@
     options.append(node("summary", "가구 계정 및 데이터 출처"));
     options.open = profileOptionsOpen;
     options.append(note(`가구 권한 · ${{ owner: "소유자", editor: "편집", viewer: "조회" }[s.session.role] || s.session.role}`));
-    const login = button("다시 로그인", () => run(() => {
-      api.clearSession();
-      resetScreenContext();
-    }));
+    const logout = button("로그아웃", signOut);
     const refresh = button("데이터 상태 새로고침", () => run(() => api.refreshData()));
     refresh.id = "demo-tools";
-    const modes = node("div", undefined, "button-row");
-    for (const [key, label] of [["fridge", "냉장고"], ["mobile", "모바일 앱"]]) {
-      const switcher = button(label, () => { setDevice(key); go("home"); }, "filter");
-      switcher.dataset.deviceChoice = key;
-      switcher.setAttribute("aria-pressed", String($("#app-shell").dataset.device === key));
-      modes.append(switcher);
-    }
-    options.append(login, refresh, modes);
+    options.append(logout, refresh);
     for (const e of s.dataErrors) options.append(note(e));
     const releases = s.data?.releases, q = s.data?.quality;
     if (releases) {
@@ -1297,7 +1715,7 @@
       options.append(note(`공식 식품 ${q.official_food_items}개 · 활성 매핑 ${q.active_mappings}개`));
       for (const source of q.ingredients_by_source || []) options.append(note(`${source.source_type}: ${source.count}개`));
     }
-    options.append(note("ThinQ 동기화 상태는 이 화면에서 제공하지 않습니다."));
+    options.append(note("ThinQ 동기화 상태는 연동 예정이에요."));
     root.append(options);
   }
 
@@ -1307,6 +1725,13 @@
     reportMember = "all";
     reportPeriod = "week";
     Object.assign(inventoryView, { query: "", filter: "all", page: 1 });
+  }
+
+  function signOut() {
+    return run(async () => {
+      await api.logout();
+      resetScreenContext();
+    });
   }
 
   function render() {
@@ -1345,11 +1770,12 @@
       alert.setAttribute("role", "alert");
       alert.dataset.httpStatus = String(errorStatus);
       root.append(alert);
-      if (errorStatus === 403)
-        root.append(button("다시 로그인", () => run(() => api.clearSession())));
+      if (errorStatus === 403 && s.session)
+        root.append(button("다시 로그인", signOut));
     }
     if (!s.session) {
-      loginView(root);
+      if (restoringSession) root.append(connectionState("loading", "로그인 확인 중…"));
+      else loginView(root);
       return;
     }
     ({ home, inventory, recommend: recommendation, recipe, cook, record, report, profile })[current](root);
@@ -1391,7 +1817,16 @@
   function setDevice(device) {
     $("#app-shell").dataset.device = device;
     document.documentElement.dataset.device = device;
+    for (const choice of $("#device-switcher").children)
+      choice.setAttribute("aria-pressed", String(choice.dataset.deviceChoice === device));
   }
+  $("#device-switcher").addEventListener("click", event => {
+    const choice = event.target.closest("button[data-device-choice]");
+    const device = choice?.dataset.deviceChoice;
+    if (busy || !device || device === $("#app-shell").dataset.device) return;
+    setDevice(device);
+    history.pushState(null, "", `/${device}#${current}`);
+  });
   const explicit = ["/fridge", "/mobile"].includes(location.pathname)
     ? location.pathname.slice(1)
     : null;
@@ -1399,6 +1834,13 @@
   current = location.hash.slice(1);
   if (!views.some(view => view.dataset.view === current)) current = "home";
   render();
+  run(async () => {
+    try {
+      if (await api.restoreSession()) await loadSignedInData();
+    } finally {
+      restoringSession = false;
+    }
+  });
   setInterval(() => {
     if (s.session && Date.now() >= s.session.expiresAt) {
       api.clearSession();

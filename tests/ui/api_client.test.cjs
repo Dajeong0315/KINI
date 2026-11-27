@@ -143,9 +143,25 @@ const success = {
   status: "recommendations_available",
   recommendations: [{ recipe_id: 2, name: "server recipe" }],
 };
-function seed(api) {
-  api.state.household = { id: 1, members: [{ id: 3 }, { id: 4 }] };
+async function signedInClient(handler) {
+  const { api, calls } = client((path, options) => {
+    if (path === "/api/auth/login")
+      return response({
+        access_token: "synthetic-token",
+        household_id: 1,
+        role: "owner",
+        expires_at: Date.now() / 1000 + 3600,
+      });
+    if (path === "/api/households/1")
+      return response({ id: 1, members: [{ id: 3 }, { id: 4 }] });
+    if (options.headers.Authorization !== "Bearer synthetic-token")
+      return response({ error: "Authentication required" }, 401);
+    return handler(path, options);
+  });
+  await api.login("owner", "synthetic-password", 1);
   api.selectMembers([3, 4]);
+  calls.length = 0;
+  return { api, calls };
 }
 test("login authenticates member lookup and clears a rejected session", async () => {
   for (const status of [200, 401, 403]) {
@@ -175,10 +191,9 @@ test("every terminal response removes candidates even if server includes stale i
     "stale_unvalidated",
   ]) {
     let fail = false;
-    const { api } = client(() =>
+    const { api } = await signedInClient(() =>
       response(fail ? { ...success, status } : structuredClone(success)),
     );
-    seed(api);
     await api.recommend({});
     api.state.picked = 2;
     fail = true;
@@ -203,10 +218,9 @@ test("network, malformed JSON, unknown status, and HTTP errors clear old selecti
     () => response({ error: "bad request" }, 500),
   ]) {
     let fail = false;
-    const { api } = client(() =>
+    const { api } = await signedInClient(() =>
       fail ? failure() : response(structuredClone(success)),
     );
-    seed(api);
     await api.recommend({});
     api.state.picked = 2;
     fail = true;
@@ -217,8 +231,7 @@ test("network, malformed JSON, unknown status, and HTTP errors clear old selecti
   }
 });
 test("more requests carry exclusions and condition changes invalidate them", async () => {
-  const { api, calls } = client(() => response(structuredClone(success)));
-  seed(api);
+  const { api, calls } = await signedInClient(() => response(structuredClone(success)));
   await api.recommend({});
   await api.recommend({}, true);
   assert.deepEqual(Array.from(calls[1].body.excluded_recipe_ids), [2]);
@@ -227,14 +240,14 @@ test("more requests carry exclusions and condition changes invalidate them", asy
   assert.deepEqual(Array.from(calls[2].body.excluded_recipe_ids), []);
 });
 test("stale revalidation prevents meal and cooking writes", async () => {
-  const { api, calls } = client(() =>
+  const { api, calls } = await signedInClient(() =>
     response({ ...success, status: "stale_unvalidated" }),
   );
-  seed(api);
   api.state.result = structuredClone(success);
   await assert.rejects(() => api.startCooking(2, true, {}));
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "GET");
+  assert.equal(api.state.result.status, "stale_unvalidated");
   assert.equal(api.state.result.recommendations.length, 0);
 });
 test("failed changes preserve verified draft; completion omits non-eaters and prevents duplicate writes", async () => {
@@ -257,7 +270,7 @@ test("failed changes preserve verified draft; completion omits non-eaters and pr
             }),
   );
   await api.login("owner", "test-password", 1);
-  seed(api);
+  api.selectMembers([3, 4]);
   api.state.cooking = {
     id: 4,
     status: "active",
@@ -266,6 +279,7 @@ test("failed changes preserve verified draft; completion omits non-eaters and pr
   api.state.result = structuredClone(success);
   api.state.picked = 2;
   await assert.rejects(() => api.changeIngredient("bad", 3));
+  assert.equal(calls[2].headers.Authorization, "Bearer test-token");
   assert.equal(api.state.cooking.ingredients[0].quantity_g, 100);
   fail = false;
   await api.complete(
@@ -352,6 +366,7 @@ test("a lost confirmation response retries the same event and quantity", async (
   await api.login("owner", "test-password", 1);
   api.state.cooking = { id: 4, status: "active" };
   await api.prepareOutflows();
+  assert.equal(calls[2].headers.Authorization, "Bearer test-token");
   await assert.rejects(() => api.confirmOutflows());
   await api.confirmOutflows();
   const changes = calls.filter((call) => call.path.endsWith("/confirm"));

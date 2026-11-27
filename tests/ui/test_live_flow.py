@@ -66,9 +66,10 @@ def sign_in(page, name='browser-owner', password='synthetic-browser-password'):
     return login.value.json().get('access_token')
 
 
-def open_recommend(page, base, name='browser-owner', *, from_home=False):
+def open_recommend(page, base, name='browser-owner', *, from_home=False, token=None):
     page.goto(base + '/mobile')
-    token = sign_in(page, name)
+    if token is None:
+        token = sign_in(page, name)
     members = page.request.get(base + '/api/households/1', headers={'Authorization': f'Bearer {token}'}).json()['members']
     member = next(m for m in members if m['id'] == 3)
     page.get_by_role('button', name=member['name'], exact=True).click()
@@ -88,7 +89,7 @@ def test_reports_failure_retry_and_expired_session_do_not_show_old_totals(live,b
     base,_=live;page=browser_page
     page.goto(base+'/mobile');sign_in(page)
     page.locator('[data-view-link=report]:visible').first.click()
-    page.get_by_role('heading',name='저장된 식사 이력',exact=True).wait_for()
+    page.get_by_role('heading',name='최근 가족 식사 기록',exact=True).wait_for()
     assert page.locator('[data-view=report] [data-status=empty]').first.is_visible()
     page.route('**/api/reports/nutrition?**',lambda route:route.fulfill(status=503,json={'error':'합성 조회 실패'}))
     page.get_by_role('button',name='기록 다시 조회',exact=True).click()
@@ -97,7 +98,7 @@ def test_reports_failure_retry_and_expired_session_do_not_show_old_totals(live,b
     assert page.locator('[data-view=report] [data-status=empty]').count()==0
     page.unroute('**/api/reports/nutrition?**')
     page.get_by_role('button',name='조회 재시도',exact=True).click()
-    page.get_by_role('heading',name='저장된 식사 이력',exact=True).wait_for()
+    page.get_by_role('heading',name='최근 가족 식사 기록',exact=True).wait_for()
     page.route('**/api/meal-records?**',lambda route:route.fulfill(status=401,json={'error':'합성 만료'}))
     page.get_by_role('button',name='기록 다시 조회',exact=True).click()
     page.get_by_role('heading',name='로컬 가구 로그인',exact=True).wait_for()
@@ -105,13 +106,58 @@ def test_reports_failure_retry_and_expired_session_do_not_show_old_totals(live,b
     assert not page.evaluate('localStorage.length || sessionStorage.length')
     page.unroute('**/api/meal-records?**')
     sign_in(page)
-    page.get_by_role('heading',name='저장된 식사 이력',exact=True).wait_for()
+    page.get_by_role('heading',name='최근 가족 식사 기록',exact=True).wait_for()
     assert page.locator('[data-view=report] [data-status=empty]').first.is_visible()
 
 
-def test_new_family_api_registration_then_existing_mobile_login(live, browser_page):
+def test_published_recipes_are_visible_on_menu_screen(live, browser_page):
+    from app.services.catalog_repository import publish, stage, validate
+    from app.services.recommendation_repository import open_db
+
+    base, _ = live
+    photo = 'https://www.foodsafetykorea.go.kr/uploadimg/cook/preview.gif'
+    recipes = [
+        {'kind': 'recipe', 'external_id': f'R{i}', 'name': f'공개 레시피 {i}',
+         'ingredients_text': '두부 100g', 'steps': ['두부를 찐다.'],
+         'image_url': photo.replace('https:', 'http:') if i == 1 else None,
+         'nutrition': {'basis_amount': 1, 'basis_unit': 'serving',
+                       'nutrients': {'energy_kcal': 110, 'protein_g': 2.1}}}
+        for i in range(1, 8)
+    ]
+    with closing(open_db(seed_demo=False)) as db:
+        release = stage(db, 'mfds_recipe', recipes, source_revision='fixture')
+        assert validate(db, release) == []
+        db.execute("UPDATE catalog_data_sources SET rights_status='approved' WHERE code='mfds_recipe'")
+        publish(db, release)
+
+    page = browser_page
+    image = bytes.fromhex('47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b')
+    page.route(photo, lambda route: route.fulfill(body=image, content_type='image/gif'))
+    page.goto(base + '/fridge#recommend')
+    sign_in(page)
+    catalog = page.get_by_role('heading', name='식약처 레시피', exact=True).locator('..')
+    assert catalog.locator('img').get_attribute('src') == photo
+    catalog.get_by_role('button', name='공개 레시피 1 조리법 보기', exact=True).click()
+    dialog = page.get_by_role('dialog')
+    dialog.get_by_text('두부 100g', exact=True).wait_for()
+    assert dialog.get_by_text('두부를 찐다.', exact=True).is_visible()
+    assert dialog.get_by_text('식약처 제공 · 1인분 기준', exact=True).is_visible()
+    assert dialog.get_by_text('110 kcal', exact=True).is_visible()
+    assert dialog.get_by_text('2.1 g', exact=True).is_visible()
+    assert dialog.get_by_role('img', name='공개 레시피 1 완성 사진', exact=True).get_attribute('src') == photo
+    page.keyboard.press('Escape')
+    catalog.get_by_role('button', name='다음 레시피', exact=True).click()
+    catalog.get_by_role('heading', name='공개 레시피 7', exact=True).wait_for()
+    assert catalog.get_by_role('button', name='다음 레시피', exact=True).is_disabled()
+    assert page.locator('.recipe-option').count() == 0
+    assert page.request.get(base + '/api/data/catalog/recipes?member_id=3').status == 400
+
+
+@pytest.mark.parametrize('viewport_width', [390, 1280])
+def test_new_family_api_registration_then_existing_mobile_login(live, browser_page, viewport_width):
     base, _ = live
     page = browser_page
+    page.set_viewport_size({'width': viewport_width, 'height': 844})
     credentials = {'login_name': 'new-family-owner', 'password': 'synthetic-onboarding-password'}
     assert page.request.post(base + '/api/auth/register', data=credentials).status == 201
     account = page.request.post(base + '/api/auth/account-login', data=credentials)
@@ -128,6 +174,7 @@ def test_new_family_api_registration_then_existing_mobile_login(live, browser_pa
                                       headers=headers, data={'name': name, 'age': age})
         assert registered.status == 201
     assert page.request.get(base + f'/api/members?household_id={household_id}').status == 401
+    page.context.clear_cookies()
     page.goto(base + '/mobile')
     page.get_by_label('가구 ID').fill(str(household_id))
     sign_in(page, credentials['login_name'], credentials['password'])
@@ -135,32 +182,65 @@ def test_new_family_api_registration_then_existing_mobile_login(live, browser_pa
     assert page.locator('[data-view=home] .member').count() == 2
     assert '새 구성원 하나' in page.locator('[data-view=home]').inner_text()
     assert '새 구성원 둘' in page.locator('[data-view=home]').inner_text()
-    assert page.locator('[data-view=home] [data-status="empty"]').is_visible()
+    assert page.locator('[data-view=home] .home-summary [data-status="empty"]').is_visible()
+    assert page.get_by_text('최근 7일간 저장된 식사 기록이 없어요.', exact=True).is_visible()
     page.locator('#household-settings').click()
     page.get_by_role('button', name='+ 구성원 추가', exact=True).click()
-    page.get_by_label('구성원 이름').fill('새 구성원 셋')
+    page.get_by_label('가족 호칭', exact=True).fill('첫째')
+    assert page.get_by_text('엄마, 아빠, 첫째처럼 가족 안에서 부르는 호칭을 입력해 주세요.', exact=True).is_visible()
     page.get_by_label('나이', exact=True).fill('12')
+    page.get_by_label('키 (cm, 선택)', exact=True).fill('153.5')
     page.get_by_label('알레르기 (쉼표 구분)').fill('새우')
+    dialog = page.get_by_role('dialog')
+    fields = dialog.locator('form > .scenario-controls')
+    columns = fields.evaluate('(grid) => getComputedStyle(grid).gridTemplateColumns')
+    assert len(columns.split()) == 2
+    assert dialog.get_by_role('radio', name='잘 모르겠어요', exact=True).is_checked()
+    assert dialog.get_by_text('대부분 앉아서 지내고, 걷거나 운동하는 시간이 적어요.', exact=True).is_visible()
+    assert dialog.get_by_text('주로 앉아서 지내지만, 출퇴근이나 산책으로 꾸준히 걸어요.', exact=True).is_visible()
+    dialog.get_by_role('radio', name='저활동적', exact=True).check()
     with page.expect_response(lambda r: r.url.endswith(f'/api/households/{household_id}/members')) as member:
         page.get_by_role('button', name='구성원 추가', exact=True).click()
     assert member.value.status == 201
-    page.get_by_role('heading', name='새 구성원 셋', exact=True).wait_for()
+    page.get_by_role('heading', name='첫째', exact=True).wait_for()
     assert '새우' in page.locator('[data-view=profile]').inner_text()
-    page.get_by_role('button', name='새 구성원 셋 정보 수정', exact=True).click()
-    assert page.get_by_role('dialog').get_by_label('알레르기').input_value() == '새우'
+    page.get_by_role('button', name='첫째 정보 수정', exact=True).click()
+    dialog = page.get_by_role('dialog')
+    assert fields.evaluate('(grid) => getComputedStyle(grid).gridTemplateColumns') == columns
+    assert dialog.get_by_label('가족 호칭', exact=True).input_value() == '첫째'
+    assert dialog.get_by_label('알레르기').input_value() == '새우'
+    assert dialog.get_by_label('키 (cm, 선택)', exact=True).input_value() == '153.5'
+    assert dialog.get_by_role('radio', name='저활동적', exact=True).is_checked()
     assert page.get_by_role('button', name='저장', exact=True).is_disabled()
-    page.keyboard.press('Escape')
-    page.get_by_role('button', name='새 구성원 셋 삭제', exact=True).click()
+    dialog.get_by_label('가족 호칭', exact=True).fill('둘째')
+    dialog.get_by_label('나이', exact=True).fill('13')
+    dialog.get_by_label('알레르기 (쉼표 구분)', exact=True).fill('게')
+    dialog.get_by_label('비선호 음식 (쉼표 구분)', exact=True).fill('고수, 버섯')
+    dialog.get_by_label('몸무게 (kg, 선택)', exact=True).fill('48.2')
+    dialog.get_by_role('radio', name='활동적', exact=True).check()
+    with page.expect_response(lambda r: r.request.method == 'PATCH') as updated:
+        dialog.get_by_role('button', name='저장', exact=True).click()
+    assert updated.value.status == 200
+    page.get_by_text('48.2 kg', exact=True).wait_for()
+    page.get_by_role('button', name='둘째 삭제', exact=True).click()
     assert page.get_by_role('button', name='삭제 확인', exact=True).is_disabled()
     page.get_by_role('button', name='닫기', exact=True).first.click()
     page.locator('[data-view-link=home]').last.click()
-    assert page.get_by_role('button', name='새 구성원 셋', exact=True).get_attribute('aria-pressed') == 'false'
-    page.get_by_role('button', name='새 구성원 셋', exact=True).click()
+    assert page.get_by_role('button', name='둘째', exact=True).get_attribute('aria-pressed') == 'false'
+    page.get_by_role('button', name='둘째', exact=True).click()
     page.locator('[data-view-link=recommend]').click()
-    assert page.get_by_role('button', name='새 구성원 셋', exact=True).get_attribute('aria-pressed') == 'true'
+    assert page.get_by_role('button', name='둘째', exact=True).get_attribute('aria-pressed') == 'true'
     page.get_by_role('button', name='전체 선택', exact=True).click()
     assert page.locator('[data-view=recommend] .member[aria-pressed=true]').count() == 4
     assert not page.evaluate('localStorage.length || sessionStorage.length')
+    page.goto(base + '/fridge#profile')
+    page.get_by_text('153.5 cm', exact=True).wait_for()
+    assert page.get_by_text('48.2 kg', exact=True).is_visible()
+    assert page.get_by_text('활동적', exact=True).is_visible()
+    page.get_by_role('button', name='둘째 정보 수정', exact=True).click()
+    assert dialog.get_by_label('나이', exact=True).input_value() == '13'
+    assert dialog.get_by_label('알레르기 (쉼표 구분)', exact=True).input_value() == '게'
+    assert dialog.get_by_label('비선호 음식 (쉼표 구분)', exact=True).input_value() == '고수, 버섯'
 
 
 @pytest.mark.parametrize('width', [390, 1280])
@@ -173,7 +253,9 @@ def test_real_api_cooking_and_saved_nutrition(live, browser_page, width):
     assert page.locator('.recipe-option').count() > 0
     Path('output/ui').mkdir(parents=True,exist_ok=True)
     page.screenshot(path=f'output/ui/live-recommend-{width}.png',full_page=True)
-    page.locator('.recipe-option').filter(has_text='두부').first.get_by_role('button').click()
+    recipe = page.locator('.recipe-option').filter(has_text='두부').first
+    recipe_name = recipe.get_by_role('heading').inner_text()
+    recipe.get_by_role('button').click()
     page.get_by_label('실제 재료·분량 및 데이터 품질을 확인했습니다').check()
     page.get_by_role('button', name='조리 시작', exact=True).click()
     page.get_by_label('변경할 정확한 재료명').fill('버섯')
@@ -208,32 +290,77 @@ def test_real_api_cooking_and_saved_nutrition(live, browser_page, width):
     assert saved.value.status == 201
     assert refreshed.value.json() == after_withdrawal
     saved_nutrition=saved.value.json()['nutrition_per_serving']
-    page.get_by_role('heading', name='저장된 식사 이력', exact=True).wait_for()
-    assert '기록 ID' in page.locator('[data-view=report]').inner_text()
+    report = page.locator('[data-view=report]')
+    recent = report.locator('.family-meals button').filter(has_text=recipe_name)
+    recent.wait_for()
     from app.services.recommendation_repository import open_db
     with open_db() as db:
         assert db.execute('SELECT COUNT(*) FROM meal_records').fetchone()[0] == 1
         assert db.execute('SELECT servings FROM meal_record_items').fetchone()[0] == .5
         protein = db.execute("SELECT amount FROM nutrition_intakes WHERE nutrient='protein_g'").fetchone()[0]
         assert protein == round(saved_nutrition['protein_g'] * .5, 2)
+        member_name = db.execute('SELECT name FROM members WHERE id=3').fetchone()[0]
         stock_after={r['ingredient_id']:r['quantity_g'] for r in db.execute('SELECT ingredient_id,quantity_g FROM inventory_items')}
         for ingredient in used:
             assert stock_after[ingredient['ingredient_id']]==stock_before[ingredient['ingredient_id']]-ingredient['quantity_g']
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     Path('output/ui').mkdir(parents=True,exist_ok=True)
     page.screenshot(path=f'output/ui/live-record-{width}.png',full_page=True)
-    page.get_by_role('button',name='기록 상세',exact=True).click()
-    assert '0.5인분' in page.get_by_role('dialog').inner_text()
-    page.keyboard.press('Escape')
-    page.get_by_role('button', name='식후 평가', exact=True).click()
     feedback = page.get_by_role('dialog')
+    recent.click()
+    feedback.get_by_role('button', name='식후 평가', exact=True).click()
+    feedback.get_by_role('group', name='맛', exact=True).wait_for()
     assert feedback.get_by_role('button', name='평가 저장', exact=True).is_disabled()
-    assert feedback.get_by_text('연동 예정', exact=True).is_visible()
+    feedback.get_by_role('button', name='평가 건너뛰기').click()
     page.reload()
-    sign_in(page)
-    page.get_by_role('heading',name='저장된 식사 이력',exact=True).wait_for()
-    assert '기록 ID' in page.locator('[data-view=report]').inner_text()
-    assert '0.5인분' in page.locator('[data-view=report]').inner_text()
+    recent.wait_for()
+    family_summary = report.get_by_role('table')
+    protein_row = family_summary.get_by_role('row').filter(has_text='단백질')
+    assert protein_row.get_by_text(f'{protein:g} g', exact=True).is_visible()
+    assert protein_row.get_by_text('기록 더 필요', exact=True).is_visible()
+    badge_tops = protein_row.locator('.badge').evaluate_all('badges => badges.map(badge => badge.getBoundingClientRect().top)')
+    assert max(badge_tops) - min(badge_tops) < 0.5
+    assert family_summary.get_by_role('row').filter(has_text='식이섬유').get_by_text('미제공', exact=True).is_visible()
+    filters = report.get_by_role('group', name='영양 현황 대상')
+    filter_names = filters.get_by_role('button').all_text_contents()
+    other_member = next(name for name in filter_names if name not in ('우리 가족', member_name))
+    filters.get_by_role('button', name=other_member, exact=True).click()
+    report.locator('.nutrition-bottom [data-status=empty]').wait_for()
+    assert not report.get_by_role('heading', name=recipe_name, exact=True).count()
+    filters.get_by_role('button', name='우리 가족', exact=True).click()
+    family_summary.get_by_role('button', name=member_name, exact=True).click()
+    report.get_by_role('heading', name=recipe_name, exact=True).wait_for()
+    member_summary = report.locator('section').filter(
+        has=page.get_by_role('heading', name=f'{member_name}의 최근 영양 현황', exact=True),
+    )
+    assert member_summary.get_by_text(f'{protein:g} g', exact=True).is_visible()
+    page.get_by_role('link', name='KINI 홈', exact=True).click()
+    home_records = page.locator('[data-view=home] .receipts')
+    home_records.get_by_role('heading', name=recipe_name, exact=True).wait_for()
+    assert '0.5인분' in home_records.inner_text()
+    home_records.get_by_role('button', name='식후 평가', exact=True).click()
+    taste = feedback.get_by_role('group', name='맛', exact=True)
+    salt = feedback.get_by_role('group', name='간', exact=True)
+    taste.get_by_role('button', name='이 항목 건너뛰기', pressed=True).wait_for()
+    taste.get_by_role('button', name='맛있어요', exact=True).click()
+    salt.get_by_role('button', name='적당해요', exact=True).click()
+    save = feedback.get_by_role('button', name='평가 저장', exact=True)
+    with page.expect_response(lambda r: r.url.endswith('/feedback') and r.request.method == 'POST') as review:
+        save.click()
+    assert review.value.status == 200
+    assert review.value.json()['feedback'] == {'taste': 'good', 'salt': 'balanced', 'difficulty': None}
+    feedback.get_by_text('평가를 저장했어요.', exact=True).wait_for()
+    page.reload()
+    home_records.get_by_role('button', name='식후 평가', exact=True).click()
+    taste.get_by_role('button', name='맛있어요', pressed=True).wait_for()
+    assert salt.get_by_role('button', name='적당해요', pressed=True).is_visible()
+    difficulty = feedback.get_by_role('group', name='난이도', exact=True)
+    assert difficulty.get_by_role('button', name='이 항목 건너뛰기', pressed=True).is_visible()
+    page.keyboard.press('Escape')
+    page.locator('button[data-view-link=report]').click()
+    with page.expect_response(lambda r: r.url.endswith('/api/recommendations') and r.request.method == 'POST') as family_request:
+        report.get_by_role('button', name='가족 맞춤 메뉴 찾기', exact=True).click()
+    assert family_request.value.request.post_data_json['participant_ids'] == [1, 2, 3, 4]
 
 
 def test_terminal_states_never_show_previous_candidates(live, browser_page):
@@ -295,7 +422,6 @@ def test_legacy_queries_data_state_and_stale_start(live,browser_page):
     page.locator('[data-view-link=profile]:visible').first.click()
     page.get_by_text('가구 계정 및 데이터 출처', exact=True).click()
     assert '/api/data-quality/summary' in page.locator('[data-view=profile]').inner_text()
-    assert 'ThinQ 동기화 상태' in page.locator('[data-view=profile]').inner_text()
     page.set_viewport_size({'width':1280,'height':900})
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     Path('output/ui').mkdir(parents=True,exist_ok=True)
@@ -329,18 +455,28 @@ def test_explicit_surfaces_keep_mode_across_resize_refresh_and_switch(live,brows
     page.get_by_role('button',name='맞춤 메뉴 추천받기',exact=True).wait_for()
     assert page.locator('#app-shell').get_attribute('data-device')==device
     assert page.locator('[data-view=home] .ai-answer:visible').count() == 0
-    assert page.locator('.home-summary').evaluate('(n)=>getComputedStyle(n).gridTemplateColumns.split(" ").length') == 2
-    for width,height in [(390,844),(870,943),(1280,960)]:
+    columns = page.locator('.home-summary').evaluate('(n)=>getComputedStyle(n).gridTemplateColumns.split(" ").length')
+    assert columns == (1 if device == 'mobile' else 2)
+    nav = page.get_by_role('navigation', name='주요 메뉴')
+    assert nav.evaluate('(n)=>getComputedStyle(n).position') == ('fixed' if device == 'mobile' else 'sticky')
+    for width,height in [(320,780),(390,844),(870,943),(1280,960)]:
         page.set_viewport_size({'width':width,'height':height})
         assert page.locator('#app-shell').get_attribute('data-device')==device
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     Path('output/ui').mkdir(parents=True,exist_ok=True)
     page.screenshot(path=f'output/ui/separate-{device}-desktop.png',full_page=True)
     page.set_viewport_size({'width':390,'height':844})
+    if device == 'mobile':
+        before = nav.bounding_box()
+        assert before['y'] + before['height'] == pytest.approx(844)
+        page.evaluate('window.scrollTo(0, document.documentElement.scrollHeight)')
+        assert page.evaluate('window.scrollY') > 0
+        assert nav.bounding_box()['y'] == pytest.approx(before['y'])
+        last_card = page.locator('[data-view=home] > :last-child')
+        assert last_card.bounding_box()['y'] + last_card.bounding_box()['height'] <= before['y']
+        page.evaluate('window.scrollTo(0, 0)')
     page.screenshot(path=f'output/ui/separate-{device}-narrow.png',full_page=True)
     page.reload()
-    page.get_by_role('heading', name='로컬 가구 로그인', exact=True).wait_for()
-    sign_in(page)
     page.get_by_role('button',name='맞춤 메뉴 추천받기',exact=True).wait_for()
     assert page.locator('#app-shell').get_attribute('data-device')==device
     # Switching layouts retains the in-memory household selection and active workflow.
@@ -348,13 +484,27 @@ def test_explicit_surfaces_keep_mode_across_resize_refresh_and_switch(live,brows
     first.click()
     selected=page.locator('[data-view=home] .member[aria-pressed=true]').count()
     other='mobile' if device=='fridge' else 'fridge'
-    page.locator('#household-settings').click()
-    page.get_by_text('가구 계정 및 데이터 출처', exact=True).click()
-    assert page.locator('[data-device-choice='+device+']').get_attribute('aria-pressed') == 'true'
-    page.get_by_role('button',name='모바일 앱' if other=='mobile' else '냉장고',exact=True).click()
+    page.locator('button[data-view-link=recommend]').click()
+    switcher = page.get_by_role('group', name='화면 버전')
+    assert switcher.locator(f'[data-device-choice={device}]').get_attribute('aria-pressed') == 'true'
+    switcher.get_by_role('button', name='앱 버전' if other=='mobile' else '냉장고 버전', exact=True).click()
     assert page.locator('#app-shell').get_attribute('data-device')==other
-    assert '/'+other in page.url
-    assert page.locator('[data-view=home] .member[aria-pressed=true]').count()==selected
+    assert page.url.endswith(f'/{other}#recommend')
+    assert page.locator('[data-view=recommend] .member[aria-pressed=true]').count() == selected
+    page.go_back()
+    switcher.locator(f'[data-device-choice={device}][aria-pressed="true"]').wait_for()
+    assert page.url.endswith(f'/{device}#recommend')
+    page.go_forward()
+    switcher.locator(f'[data-device-choice={other}][aria-pressed="true"]').wait_for()
+    assert page.url.endswith(f'/{other}#recommend')
+    page.locator('#household-settings').click()
+    logout = page.get_by_role('button', name='로그아웃', exact=True)
+    if not logout.is_visible():
+        page.get_by_text('가구 계정 및 데이터 출처', exact=True).click()
+    logout.click()
+    page.get_by_role('heading', name='로컬 가구 로그인', exact=True).wait_for()
+    page.reload()
+    page.get_by_role('heading', name='로컬 가구 로그인', exact=True).wait_for()
 
 
 
@@ -396,26 +546,28 @@ def test_tablet_screens_fit_and_pending_actions_are_explicit(live, browser_page,
         )
         page.screenshot(path=output / f'tablet-{width}-{screen}.png', full_page=True, animations='disabled')
         if screen == 'home':
-            page.get_by_role('button', name='구매 제안 자세히 보기').click()
-            assert page.get_by_role('dialog').get_by_text('연동 예정', exact=True).is_visible()
-            page.keyboard.press('Escape')
-            assert page.get_by_role('button', name='구매 제안 자세히 보기').evaluate('(button) => button === document.activeElement')
+            assert page.get_by_role('heading', name='최근 식사 기록', exact=True).is_visible()
+            assert page.get_by_role('heading', name='KINI 맞춤 구매 제안', exact=True).is_visible()
         elif screen == 'inventory':
             page.get_by_role('button', name='채소', exact=True).wait_for()
             assert page.get_by_role('button', name='채소', exact=True).is_disabled()
-            page.locator('.inventory-table button', has_text='수정').first.click()
+            edit = page.locator('.inventory-table button', has_text='수정').first
+            edit.click()
             assert page.get_by_role('dialog').get_by_label('식재료명').evaluate('(input) => input.readOnly')
             assert page.get_by_role('button', name='변경 저장', exact=True).is_disabled()
             page.keyboard.press('Escape')
+            assert edit.evaluate('(button) => button === document.activeElement')
             page.locator('.inventory-table button', has_text='삭제').first.click()
             assert page.get_by_role('dialog').get_by_role('button', name='재고에서 삭제', exact=True).is_disabled()
             page.keyboard.press('Escape')
             page.get_by_label('식재료 검색').fill('일치하지 않는 재료명')
             assert page.locator('.inventory-list [data-status="empty"]').is_visible()
         elif screen == 'report':
-            assert page.locator('[data-view=report] [data-status="empty"]').first.is_visible()
+            assert page.get_by_role('heading', name='우리 가족 영양 밸런스', exact=True).is_visible()
+            assert page.get_by_role('table').get_by_text('기록 없음', exact=True).count() > 0
+            assert page.get_by_role('button', name='가족 맞춤 메뉴 찾기', exact=True).is_enabled()
         elif screen == 'recommend':
-            assert page.get_by_role('heading', name='냉장고 속 재료로 만들 수 있는 메뉴').is_visible()
+            assert page.get_by_role('heading', name='냉장고 속 재료로 만들 수 있는 메뉴', exact=True).is_visible()
             assert page.locator('.recipe-option').count() == 0
 
     page.route('**/api/data/inventory', lambda route: route.fulfill(status=500, json={'error': 'test failure'}))
@@ -471,10 +623,10 @@ def test_login_failure_and_completion_http_errors(live, browser_page):
 
     save_with_error(403)
     page.get_by_role('button', name='다시 로그인', exact=True).click()
-    sign_in(page)
+    owner_token = sign_in(page)
     # A different account must not inherit the viewer's unfinished form.
     assert page.get_by_label('실제 섭취량 (인분)').count() == 0
-    open_recommend(page, base)
+    open_recommend(page, base, token=owner_token)
     request_recommend(page)
     page.locator('.recipe-option').first.get_by_role('button').click()
     page.get_by_label('실제 재료·분량 및 데이터 품질을 확인했습니다').check()

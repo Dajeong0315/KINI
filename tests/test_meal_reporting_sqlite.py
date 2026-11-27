@@ -28,11 +28,41 @@ def test_legacy_snapshot_reading_and_authorization(tmp_path,monkeypatch):
     assert report.json['total_servings']==0.5 and report.json['data_quality']=='recorded'
     detail=client.get(f'/api/meal-records/{rid}',headers=auth).json
     assert detail['recipe_name_source']=='current_catalog'
-    with closing(open_db(seed_demo=False)) as db:
+    feedback_path = f'/api/meal-records/{rid}/feedback'
+    evaluation = {'taste': 'good', 'salt': None, 'difficulty': None}
+    assert client.post(feedback_path, json=evaluation, headers=auth).status_code == 200
+    with closing(open_db(seed_demo=False)) as db, db:
         assert db.execute('SELECT COUNT(*) FROM meal_records').fetchone()[0]==1
+        db.execute('ALTER TABLE meal_account_feedback RENAME TO meal_feedback')
+    assert client.get(feedback_path, headers=auth).json == {'feedback': evaluation}
 
 
 @pytest.mark.parametrize('value',[None,'bad date','9999-12-31T23:59:59-12:00'])
 def test_invalid_legacy_timestamps_are_not_guessed(value):
     from app.services.meal_reporting import eaten_time
     assert eaten_time(value) is None
+
+
+def test_family_nutrition_balance_uses_recorded_meals_and_member_limits():
+    from app.services.meal_reporting import _balance
+
+    targets = {'energy_kcal': 250, 'protein_g': 60, 'sodium_mg': 2000}
+    meals = [
+        {'meal_date': day, 'meal_type': kind, 'items': [{'servings': 1, 'nutrition': {
+            'energy_kcal': 100, 'protein_g': 10, 'carbohydrate_g': 10, 'fat_g': 3, 'sodium_mg': sodium,
+        }}]}
+        for day, kind, sodium in [
+            ('2026-11-25', 'dinner', 650),
+            ('2026-11-26', 'breakfast', 100),
+            ('2026-11-26', 'lunch', 100),
+            ('2026-11-26', 'dinner', 100),
+        ]
+    ]
+    partial, complete_days = _balance(meals[:1], targets, [600])
+    assert complete_days == 0
+    assert partial['protein_g'] == 'partial' and partial['sodium_mg'] == 'caution'
+
+    complete, complete_days = _balance(meals, targets, [600])
+    assert complete_days == 1
+    assert complete == {'energy_kcal': 'met', 'protein_g': 'below', 'carbohydrate_g': 'no_target',
+                        'fat_g': 'no_target', 'sodium_mg': 'caution', 'fiber_g': 'unavailable'}

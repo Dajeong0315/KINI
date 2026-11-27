@@ -56,6 +56,32 @@ def test_login_contract_storage_and_no_secret_logging(auth, caplog):
     assert bool(body['access_token'] not in caplog.text)
 
 
+@pytest.mark.parametrize('origin', ['http://localhost', 'https://localhost'])
+def test_browser_session_restores_until_logout(auth, origin):
+    client, password, _ = auth
+    login = client.post('/api/auth/login', base_url=origin, json={
+        'login_name': 'owner', 'password': password, 'household_id': 1,
+    })
+    assert login.status_code == 200
+    cookie = login.headers['Set-Cookie']
+    assert all(flag in cookie for flag in ('HttpOnly', 'SameSite=Strict', 'Path=/api/auth', 'Max-Age=3600'))
+    assert ('; Secure' in cookie) == origin.startswith('https:')
+    assert client.get('/api/data/inventory', base_url=origin).status_code == 401
+
+    restored = client.get('/api/auth/session', base_url=origin)
+    assert restored.status_code == 200
+    assert restored.headers['Cache-Control'] == 'no-store'
+    assert 'Set-Cookie' not in restored.headers
+    assert restored.json['access_token'] == login.json['access_token']
+    assert restored.json['expires_at'] == login.json['expires_at']
+    assert restored.json['household_id'] == login.json['household_id']
+
+    assert client.post('/api/auth/logout', base_url=origin, data={'form': 'value'}).status_code == 400
+    assert client.post('/api/auth/logout', base_url=origin, json={}).status_code == 200
+    assert client.get('/api/auth/session', base_url=origin).status_code == 401
+    assert client.get('/api/data/inventory', base_url=origin, headers=_headers(login)).status_code == 403
+
+
 @pytest.mark.parametrize('failure', ['password', 'account', 'household', 'inactive', 'membership'])
 def test_login_failures_are_identical_and_do_not_issue_sessions(auth, failure, caplog):
     changes = {}
@@ -131,6 +157,7 @@ def test_session_stops_working_after_server_change(auth, change):
         else:
             db.execute('DELETE FROM account_households')
     assert auth[0].get('/api/data/inventory', headers=_headers(response)).status_code == 403
+    assert auth[0].get('/api/auth/session').status_code == 401
 
 
 def test_multi_household_selection_issues_scoped_sessions(auth):

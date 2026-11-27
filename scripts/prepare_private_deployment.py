@@ -45,7 +45,7 @@ SET LOCAL ROLE kini_migrator;
 SET LOCAL search_path = kini_private, pg_catalog;
 '''
     migrations = sorted((ROOT / 'db/migrations').glob('*.sql'))
-    if len(migrations) != 10:
+    if len(migrations) != 12:
         raise ValueError('Review a new migration set before deployment')
     for path in migrations:
         contents = path.read_text(encoding='utf-8')
@@ -58,7 +58,10 @@ SET LOCAL search_path = kini_private, pg_catalog;
 DO $rls$ DECLARE t record; BEGIN
     FOR t IN SELECT tablename FROM pg_tables WHERE schemaname='kini_private' LOOP
         EXECUTE format('ALTER TABLE kini_private.%I ENABLE ROW LEVEL SECURITY', t.tablename);
-        EXECUTE format('CREATE POLICY kini_app_backend_access ON kini_private.%I TO kini_app USING (true) WITH CHECK (true)', t.tablename);
+        IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='kini_private'
+            AND tablename=t.tablename AND policyname='kini_app_backend_access') THEN
+            EXECUTE format('CREATE POLICY kini_app_backend_access ON kini_private.%I TO kini_app USING (true) WITH CHECK (true)', t.tablename);
+        END IF;
     END LOOP;
 END $rls$;
 RESET ROLE;

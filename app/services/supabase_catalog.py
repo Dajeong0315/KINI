@@ -42,6 +42,12 @@ class SupabasePublicCatalog(PublicCatalog):
         return hashlib.sha256(json.dumps([dict(r) for r in rows], sort_keys=True,
                                         ensure_ascii=False).encode()).hexdigest()
 
+    def _recipe_rows(self, db, release_id, limit, offset):
+        # The app's public role can read projected recipe data.
+        return db.execute("""SELECT external_id,name,NULL AS payload_json FROM public.catalog_recipes
+            WHERE release_id=? ORDER BY external_id LIMIT ? OFFSET ?""",
+                          (release_id, limit, offset)).fetchall()
+
     def _load(self, db, source, release, version, kind, external_id):
         table = 'catalog_foods' if kind == 'food' else 'catalog_recipes'
         row = db.execute(f'SELECT * FROM public.{table} WHERE release_id=? AND external_id=?',

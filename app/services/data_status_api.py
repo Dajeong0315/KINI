@@ -88,6 +88,18 @@ def public_food(external_id):
     return _public_detail('food',external_id)
 
 
+@api.get('/api/data/catalog/recipes')
+def public_recipes():
+    offsets = request.args.getlist('offset')
+    offset = offsets[0] if offsets else '0'
+    if (set(request.args) - {'offset'} or len(offsets) > 1
+            or not (offset.isascii() and offset.isdigit() and len(offset) <= 6)
+            or int(offset) > 100_000):
+        return jsonify({'error': '레시피 목록 위치를 확인해 주세요.'}), 400
+    with closing(open_db(seed_demo=False)) as db:
+        return jsonify(catalog_service().recipe_page(db, int(offset)))
+
+
 @api.get('/api/data/catalog/recipes/<external_id>')
 def public_recipe(external_id):
     return _public_detail('recipe',external_id)

@@ -98,6 +98,8 @@ def test_recipe_unknown_servings_are_preserved(catalog_db):
     db.execute("INSERT INTO public.catalog_recipes VALUES (?,'SYNTHETIC-RECIPE','synthetic recipe',NULL,NULL,'synthetic vegetable 10g')", (recipe_release,))
     db.execute("INSERT INTO public.catalog_recipe_steps VALUES (?,'SYNTHETIC-RECIPE',1,'synthetic instruction')", (recipe_release,))
     db.execute("INSERT INTO public.catalog_recipe_nutrients VALUES (?,'SYNTHETIC-RECIPE','energy_kcal',25,100,'g')", (recipe_release,))
+    page = catalog.recipe_page(db, 0)
+    assert page['items'] == [{'external_id': 'SYNTHETIC-RECIPE', 'name': 'synthetic recipe', 'image_url': None}]
     result = catalog.read(db, 'mfds_recipe', 'recipe', 'SYNTHETIC-RECIPE').item
     assert result['servings'] is None and result['cook_time_minutes'] is None
     assert result['nutrition']['energy_kcal'] == dict(amount=25, basis_amount=100, basis_unit='g')

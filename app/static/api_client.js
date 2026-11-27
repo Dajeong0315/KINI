@@ -18,7 +18,7 @@
       picked: null,
       cooking: null,
       meal: null,
-      receipts: [],
+      recentMeals: { status: "idle", records: [] },
       inventory: null,
       inventoryStatus: "idle",
       session: null,
@@ -26,6 +26,7 @@
       data: null,
       dataErrors: [],
       ingredientNames: {},
+      receipts: [],
       history: null,
       nutritionReport: null,
       reportsStatus: "idle",
@@ -126,6 +127,7 @@
       state.reportsStatus = "idle";
       state.reportsError = "";
       state.receipts = [];
+      state.recentMeals = { status: "idle", records: [] };
     }
     async function login(login_name, password, household_id) {
       if (
@@ -135,7 +137,6 @@
         throw new APIError(
           "진행 중인 조리를 이어가려면 같은 가구로 로그인해 주세요.",
         );
-      const previousOwner = owner;
       const nextOwner = `${login_name.trim().toLowerCase()}:${household_id}`;
       const ticket = ++sessionEpoch;
       const v = await request("/api/auth/login", {
@@ -144,19 +145,39 @@
         household_id,
       });
       if (ticket !== sessionEpoch) throw new APIError("로그인 요청이 변경되었습니다.", 409);
+      await acceptSession(v, nextOwner, ticket);
+    }
+    async function restoreSession() {
+      const ticket = ++sessionEpoch;
+      let session;
+      try {
+        session = await request("/api/auth/session", undefined, false);
+      } catch (error) {
+        if (error.status === 401) return false;
+        throw error;
+      }
+      if (ticket !== sessionEpoch) return false;
+      await acceptSession(session, "restored:" + session.household_id, ticket);
+      return true;
+    }
+    async function logout() {
+      await request("/api/auth/logout", {}, false);
+      clearSession();
+    }
+    async function acceptSession(v, nextOwner, ticket) {
       state.session = { role: v.role, expiresAt: v.expires_at * 1000 };
       token = v.access_token;
       let household;
       try {
         household = await request(`/api/households/${v.household_id}`, undefined, true);
       } catch (error) {
-        clearSession();
+        if (ticket === sessionEpoch) clearSession();
         throw error;
       }
-      if (state.household?.id !== v.household_id || previousOwner !== nextOwner) {
+      if (ticket !== sessionEpoch) return;
+      if (state.household?.id !== v.household_id || owner !== nextOwner) {
         invalidate();
         state.selected = [];
-        state.receipts = [];
         state.ingredientNames = {};
         state.cooking = null;
         state.outflows = null;
@@ -164,17 +185,46 @@
         visionConfirmations.clear();
         visionBusy.clear();
         submittedMeal = null;
+        state.receipts = [];
         state.history = state.nutritionReport = state.recordDetail = state.data = null;
         state.reportsStatus = "idle";
         reportEpoch++;
       }
       owner = nextOwner;
       state.household = household;
+      state.recentMeals = { status: "idle", records: [] };
+    }
+    async function loadRecentMeals() {
+      const session = state.session;
+      const pending = { status: "loading", records: [] };
+      state.recentMeals = pending;
+      try {
+        const history = await request("/api/meal-records?period=week&limit=3", undefined, true);
+        if (state.session !== session || state.recentMeals !== pending) return;
+        if (history.household_id !== state.household.id || !Array.isArray(history.records))
+          throw new APIError("식사 기록을 확인할 수 없습니다.");
+        state.recentMeals = { status: "ready", records: history.records };
+      } catch (error) {
+        if (state.session === session && state.recentMeals === pending)
+          state.recentMeals = { status: "error", records: [] };
+        if (error.status === 401) throw error;
+      }
+    }
+    function mealFeedback(recordId, feedback) {
+      return request(`/api/meal-records/${recordId}/feedback`, feedback, true);
     }
     async function addMember(profile) {
       unlocked();
       const member = await request(`/api/households/${state.household.id}/members`, profile, true);
       state.household.members = [...state.household.members, member];
+      invalidate();
+      return member;
+    }
+    async function updateMember(memberId, profile) {
+      unlocked();
+      const household = state.household;
+      const member = await request(`/api/households/${household.id}/members/${memberId}`, profile, true, "PATCH");
+      household.members = household.members.map(current => current.id === member.id ? member : current);
       invalidate();
       return member;
     }
@@ -253,13 +303,17 @@
       state.meal = null;
       seen = more ? [...new Set([...seen, ...prior])] : [];
       try {
-        const v = await request("/api/recommendations", {
-          ...mealRequest(c),
-          cook_time_limit_minutes: c.cook_time_limit_minutes,
-          purchase_allowed: !!c.purchase_allowed,
-          excluded_ingredients: c.excluded_ingredients || [],
-          excluded_recipe_ids: seen,
-        });
+        const v = await request(
+          "/api/recommendations",
+          {
+            ...mealRequest(c),
+            cook_time_limit_minutes: c.cook_time_limit_minutes,
+            purchase_allowed: !!c.purchase_allowed,
+            excluded_ingredients: c.excluded_ingredients || [],
+            excluded_recipe_ids: seen,
+          },
+          true,
+        );
         if (
           ![
             "recommendations_available",
@@ -297,6 +351,8 @@
         throw new APIError("현재 추천 메뉴를 다시 선택해 주세요.");
       const current = await request(
         `/api/recommendations/${state.result.request_id}`,
+        undefined,
+        true,
       );
       if (current.status !== "recommendations_available") {
         state.result = { ...current, recommendations: [] };
@@ -304,12 +360,16 @@
         throw new APIError("추천 정보가 변경되었습니다. 다시 추천해 주세요.");
       }
       if (!state.meal)
-        state.meal = await request("/api/meal-sessions", mealRequest(c));
-      state.cooking = await request("/api/cooking-sessions", {
-        meal_session_id: state.meal.session_id,
-        recommendation_request_id: state.result.request_id,
-        recipe_id: recipeId,
-      });
+        state.meal = await request("/api/meal-sessions", mealRequest(c), true);
+      state.cooking = await request(
+        "/api/cooking-sessions",
+        {
+          meal_session_id: state.meal.session_id,
+          recommendation_request_id: state.result.request_id,
+          recipe_id: recipeId,
+        },
+        true,
+      );
       state.picked = recipeId;
       state.outflows = null;
       submittedMeal = null;
@@ -333,6 +393,7 @@
       state.cooking = await request(
         `/api/cooking-sessions/${state.cooking.id}/ingredients`,
         { ingredient, quantity_g: n },
+        true,
       );
       state.outflows = null;
       return state.cooking;
@@ -340,7 +401,11 @@
     async function prepareOutflows() {
       if (state.outflows?.started) return;
       state.outflows = null;
-      const draft = await request(`/api/cooking-sessions/${state.cooking.id}`);
+      const draft = await request(
+        `/api/cooking-sessions/${state.cooking.id}`,
+        undefined,
+        true,
+      );
       if (draft.status !== "active")
         throw new APIError("진행 중인 조리가 없습니다.");
       state.cooking = draft;
@@ -475,7 +540,7 @@
       try {
       let v;
       if (submittedMeal) {
-        const draft = await request(path);
+        const draft = await request(path, undefined, true);
         if (draft.status === "completed") {
           v = {
             record_id: draft.meal_record_id,
@@ -519,6 +584,7 @@
       state.inventoryStatus = "idle";
       state.history = state.nutritionReport = state.recordDetail = null;
       state.reportsStatus = "idle";
+      state.recentMeals = { status: "idle", records: [] };
       // A new recommendation must supply a fresh inventory snapshot after completion.
       if (state.result) state.result.inventory_snapshot = [];
       return v;
@@ -533,8 +599,19 @@
       state,
       request,
       login,
-      addMember,
+      restoreSession,
       clearSession,
+      logout,
+      addMember,
+      updateMember,
+      loadRecentMeals,
+      publicRecipes(offset) {
+        return request(`/api/data/catalog/recipes?offset=${offset}`, undefined, false);
+      },
+      publicRecipe(id) {
+        return request(`/api/data/catalog/recipes/${encodeURIComponent(id)}`, undefined, false);
+      },
+      mealFeedback,
       refreshData,
       recommend,
       startCooking,
@@ -612,11 +689,11 @@
       },
       async addInventory(name, quantity, expiry_date, unit = "g") {
         unlocked();
-        const n = await request("/api/inventory/normalize", {
-          name,
-          quantity,
-          unit,
-        }, true);
+        const n = await request(
+          "/api/inventory/normalize",
+          { name, quantity, unit },
+          true,
+        );
         if (!n.ingredient.ingredient_id || n.conversion.quantity_g == null)
           throw new APIError(
             "등록된 재료와 실제 중량을 확인해 주세요. 미매칭 재료 등록 API는 아직 없습니다.",

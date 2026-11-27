@@ -44,8 +44,13 @@ def test_deployed_vision_screen_reload():
             source = page.request.get(base + '/static/' + filename)
             assert source.status == 200
             assert hashlib.sha256(source.body()).digest() == hashlib.sha256((root / 'app/static' / filename).read_bytes()).digest()
-        page.reload();sign_in()
-        page.get_by_role('heading', name='인식 확인 대기', exact=True).wait_for()
+        page.reload()
+        login_field = page.get_by_label('로그인 이름', exact=True)
+        pending = page.get_by_role('heading', name='인식 확인 대기', exact=True)
+        pending.or_(login_field).wait_for()
+        if login_field.is_visible():
+            sign_in()
+        pending.wait_for()
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         assert not errors and not writes
         browser.close()

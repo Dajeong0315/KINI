@@ -132,6 +132,33 @@ def test_reporting_transaction_rejects_accidental_write(http,rule_db,monkeypatch
     assert stock_state(rule_db)==before
 
 
+def test_meal_feedback_persists_per_account_without_touching_stock_or_intake(http, rule_db):
+    api, login = http
+    owner = login()
+    viewer = login('rec-viewer')
+    other = login('rec-other', 2)
+    rid, _ = recorded(api, owner)
+    path = f'/api/meal-records/{rid}/feedback'
+    feedback = {'taste': 'good', 'salt': None, 'difficulty': 'easy'}
+    before = stock_state(rule_db)
+
+    assert api('POST', path, feedback).status_code == 401
+    assert api('POST', path, feedback, viewer).status_code == 403
+    assert api('POST', path, feedback, other).status_code == 404
+    assert api('GET', path, auth=other).status_code == 404
+    assert api('POST', path, dict.fromkeys(feedback), owner).status_code == 400
+    assert api('POST', path, {**feedback, 'salt': 'skip'}, owner).status_code == 400
+
+    for expected in (feedback, feedback, {**feedback, 'taste': 'okay'}):
+        assert api('POST', path, expected, owner).status_code == 200
+        result = api('GET', path, auth=owner)
+        assert result.json() == {'feedback': expected}
+        assert result.headers['Cache-Control'] == 'no-store'
+    assert api('GET', path, auth=viewer).json() == {'feedback': None}
+    assert rule_db.execute('SELECT COUNT(*) FROM meal_account_feedback WHERE record_id=?', (rid,)).fetchone()[0] == 1
+    assert stock_state(rule_db) == before
+
+
 def test_007_upgrade_is_repeatable_and_preserves_stored_history():
     import subprocess
     import sys

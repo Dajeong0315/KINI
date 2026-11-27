@@ -26,9 +26,16 @@ def test_deployed_shared_feedback_edit_and_reconnect():
             page.get_by_role('button', name='로그인', exact=True).click()
             page.locator('body[aria-busy=false]').wait_for()
 
+        records = page.get_by_role('heading', name='최근 가족 식사 기록', exact=True).or_(
+            page.get_by_role('heading', name='저장된 식사 이력', exact=True))
+
         def open_feedback():
             card = page.locator('[data-view=report] .scenario-log').filter(has_text='기록 ID 1')
-            card.get_by_role('button', name='식후 평가', exact=True).click()
+            row = page.locator('.family-meals button[data-record-id="1"]')
+            action = row.or_(card.get_by_role('button', name='식후 평가', exact=True))
+            action.click()
+            if row.count():
+                page.get_by_role('dialog').get_by_role('button', name='식후 평가', exact=True).click()
             page.get_by_role('heading', name='식후 평가 수정', exact=True).wait_for()
             page.locator('body[aria-busy=false]').wait_for()
 
@@ -45,15 +52,18 @@ def test_deployed_shared_feedback_edit_and_reconnect():
         page.goto(url + '/mobile')
         login()
         page.locator('[data-view-link=report]:visible').first.click()
-        page.get_by_role('heading', name='저장된 식사 이력', exact=True).wait_for()
+        records.wait_for()
         open_feedback()
         negative = save_taste('별로예요')
         open_feedback()
         positive = save_taste('맛있어요')
         assert positive['revision'] == negative['revision'] + 1
         page.reload()
-        login()
-        page.get_by_role('heading', name='저장된 식사 이력', exact=True).wait_for()
+        login_field = page.get_by_label('로그인 이름', exact=True)
+        records.or_(login_field).wait_for()
+        if login_field.is_visible():
+            login()
+        records.wait_for()
         open_feedback()
         assert page.get_by_role('dialog').locator('section[aria-label="맛"]').get_by_role('button', name='맛있어요', exact=True).get_attribute('aria-pressed') == 'true'
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')

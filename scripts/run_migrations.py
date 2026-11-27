@@ -25,6 +25,9 @@ def main():
         ).fetchone():
             raise RuntimeError('Target schema is not empty and has no KINI migration history; refusing DDL')
         applied = {row[0] for row in db.execute('SELECT version FROM schema_migrations')} if has_history else set()
+        # Prior local previews used the shared-feedback name for account-specific rows.
+        if '009_meal_feedback' in applied and '010_meal_feedback' not in applied:
+            db.execute('ALTER TABLE meal_feedback RENAME TO meal_account_feedback')
         completed = []
         for migration in migrations:
             if migration.stem in applied:

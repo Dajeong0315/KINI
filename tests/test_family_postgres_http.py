@@ -84,16 +84,26 @@ def test_registration_family_profiles_and_existing_member_lookup(api, caplog):
         'households': [{'id': hid, 'name': 'synthetic family', 'role': 'owner'}]}
     ids = []
     for name, age in [('synthetic adult', 40), ('synthetic child', 10)]:
+        physical = {'height_cm': 173.4, 'activity_level': 'low_active'} if age == 40 else {}
         response = api('POST', f'/api/households/{hid}/members', {
             'name': name, 'age': age, 'allergies': [' shrimp ', 'shrimp'], 'dislikes': ['mushroom'],
+            **physical,
         }, auth)
         assert response.status_code == 201
         member = response.json()
         assert member['household_id'] == hid and member['allergies'] == ['shrimp']
         assert member['preferences'] == [{'kind': 'dislike', 'value': 'mushroom'}]
         assert member['constraints'] == [] and member['targets'] == {}
+        assert member['height_cm'] == physical.get('height_cm') and member['weight_kg'] is None
+        assert member['activity_level'] == physical.get('activity_level')
         assert response.headers['Cache-Control'] == 'no-store'
         ids.append(member['id'])
+    updated = api('PATCH', f'/api/households/{hid}/members/{ids[0]}', {
+        'name': 'updated adult', 'age': 41, 'allergies': ['crab'], 'dislikes': [],
+        'weight_kg': 68.5, 'activity_level': 'active',
+    }, auth)
+    assert updated.status_code == 200
+    assert updated.json()['height_cm'] == 173.4 and updated.json()['weight_kg'] == 68.5
     with database() as db:
         db.execute('INSERT INTO member_health_constraints VALUES (?,?,?)', (ids[0], 'sodium', 'low'))
         db.execute('INSERT INTO member_nutrition_targets VALUES (?,?,?)', (ids[0], 'protein_g', 60))
@@ -106,10 +116,20 @@ def test_registration_family_profiles_and_existing_member_lookup(api, caplog):
     assert [m['id'] for m in household.json()['members']] == ids
     assert household.json()['members'][0]['constraints'] == [{'kind': 'sodium', 'value': 'low'}]
     assert household.json()['members'][0]['targets'] == {'protein_g': 60}
-    for path in [f'/api/households/{hid}/members', f'/api/members?household_id={hid}']:
-        result = api('GET', path, headers=auth)
-        assert result.status_code == 200
-        assert result.json()['members'] == household.json()['members']
+    assert household.json()['members'][0]['weight_kg'] == 68.5
+    assert household.json()['members'][0]['activity_level'] == 'active'
+    assert household.json()['members'][0]['name'] == 'updated adult'
+    assert household.json()['members'][0]['age'] == 41
+    assert household.json()['members'][0]['allergies'] == ['crab']
+    assert household.json()['members'][0]['preferences'] == []
+    profiles = api('GET', f'/api/households/{hid}/members', headers=auth)
+    assert profiles.status_code == 200 and profiles.json()['members'] == household.json()['members']
+    members = api('GET', f'/api/members?household_id={hid}', headers=auth)
+    assert members.status_code == 200
+    assert members.json()['members'] == [
+        {key: value for key, value in member.items() if key not in {'height_cm', 'weight_kg', 'activity_level'}}
+        for member in profiles.json()['members']
+    ]
     for secret in [credentials['password'], auth['Authorization'][7:], account_auth['Authorization'][7:]]:
         assert secret not in caplog.text
 
@@ -190,6 +210,27 @@ def test_family_creation_and_profile_creation_roll_back_atomically(api, target):
             db.execute('DROP FUNCTION fail_family_write()')
 
 
+def test_profile_update_rolls_back_when_food_update_fails(api):
+    hid, auth, _, _, _ = family(api)
+    path = f'/api/households/{hid}/members'
+    created = api('POST', path, {'name': 'first', 'age': 10, 'allergies': ['shrimp']}, auth)
+    assert created.status_code == 201
+    profile = created.json()
+    with database() as db:
+        db.execute("""CREATE FUNCTION fail_allergy_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'synthetic food write failure'; END $$""")
+        db.execute('CREATE TRIGGER fail_allergy_insert BEFORE INSERT ON member_allergies '
+                   'FOR EACH ROW EXECUTE FUNCTION fail_allergy_insert()')
+    try:
+        updated = api('PATCH', f"{path}/{profile['id']}", {'name': 'changed', 'allergies': ['crab']}, auth)
+        assert updated.status_code == 500
+        assert api('GET', path, headers=auth).json()['members'] == [profile]
+    finally:
+        with database() as db:
+            db.execute('DROP TRIGGER fail_allergy_insert ON member_allergies')
+            db.execute('DROP FUNCTION fail_allergy_insert()')
+
+
 @pytest.mark.parametrize('start', ['empty', 'step1'])
 def test_migrations_fresh_upgrade_repeat_and_profile_cascade(start):
     import psycopg
@@ -218,9 +259,14 @@ def test_migrations_fresh_upgrade_repeat_and_profile_cascade(start):
                 repeat = subprocess.run([sys.executable, str(ROOT / 'scripts/run_migrations.py')],
                                         env=env, capture_output=True, text=True)
                 assert repeat.returncode == 0 and 'already up to date' in repeat.stdout
-                assert {'001_step1_postgresql', '002_family_profiles'} <= {r[0] for r in db.execute('SELECT version FROM schema_migrations')}
+                assert {'001_step1_postgresql', '002_family_profiles', '011_member_profile'} <= {
+                    r[0] for r in db.execute('SELECT version FROM schema_migrations')
+                }
                 if start == 'step1':
                     assert db.execute('SELECT name FROM households WHERE id=9001').fetchone()[0] == 'synthetic preserved family'
+                    assert db.execute('SELECT height_cm,weight_kg,activity_level FROM members WHERE id=9002').fetchone() == (
+                        None, None, None,
+                    )
                     assert db.execute('SELECT COUNT(*) FROM auth_sessions').fetchone()[0] == 1
                     for table, columns, values in [
                         ('member_allergies', 'member_id,ingredient', (9002, 'shrimp')),

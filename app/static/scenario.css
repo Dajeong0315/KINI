@@ -83,12 +83,29 @@
   padding: 9px 0;
   border-bottom: 1px solid var(--line);
 }
-.expiry-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.expiry-list li, .receipts li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.receipts li { flex-wrap: wrap; }
 .expiry-list li span:first-child { min-width: 0; }
 .expiry-list li .badge { flex: none; }
 .recipe-option > .outline:last-child { margin-top: auto; }
 .recipe-detail { display: grid; gap: 14px; min-width: 0; overflow-wrap: anywhere; }
 .recipe-detail ul, .recipe-detail ol { padding-left: 22px; }
+.public-recipe-preview { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.public-recipe-thumbnail {
+  width: 72px;
+  height: 54px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--soft);
+}
+.public-recipe-photo {
+  width: 100%;
+  max-height: 300px;
+  object-fit: contain;
+  border-radius: 12px;
+  background: var(--soft);
+}
 .nutrient-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -118,6 +135,29 @@
 }
 .scenario-field:has(input[type="checkbox"]) { flex-direction: row-reverse; justify-content: flex-end; align-items: center; min-height: 46px; gap: 8px; }
 .scenario-field input, .scenario-field select, .scenario-field textarea { font-weight: 400; }
+.scenario-field > .data-note { font-weight: 400; }
+.activity-field {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.activity-field legend { padding: 0; margin-bottom: 5px; font-weight: 700; }
+.activity-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.activity-option:has(:checked) { background: var(--soft); border-color: var(--focus); }
+.activity-option input { flex: 0 0 20px; margin-top: 2px; }
+.activity-option-copy { display: grid; gap: 2px; font-size: .93rem; }
 .scenario-status, .scenario-warning, .inline-success, .inline-warning, .ai-answer {
   display: block;
   min-width: 0;
@@ -158,8 +198,47 @@
 .item-name { font-weight: 700; }
 .pagination { display: flex; justify-content: center; align-items: center; gap: 10px; margin: 14px 0 0; }
 .nutrition-rows { display: grid; gap: 12px; align-self: stretch; }
-.nutrition-row { display: grid; align-items: center; grid-template-columns: minmax(66px, .3fr) minmax(0, 1fr) auto; gap: 12px; }
+.nutrition-row { display: grid; align-items: center; grid-template-columns: minmax(66px, .3fr) minmax(0, 1fr) minmax(5ch, auto); gap: 12px; }
+.nutrition-row dd { text-align: right; }
 .nutrition-track { height: 9px; border: 1px solid #e1e8dc; border-radius: 6px; background: #e9eee6; }
+.nutrition-bottom { align-items: start; }
+.family-balance-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.family-balance {
+  width: 100%;
+  min-width: max-content;
+  border-collapse: collapse;
+}
+.family-balance th,
+.family-balance td { padding: 8px; text-align: center; border-bottom: 1px solid var(--line); }
+.family-balance tbody td { vertical-align: top; }
+.family-balance th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--paper);
+  text-align: left;
+}
+.family-balance thead th { vertical-align: top; }
+.family-balance thead th:first-child { vertical-align: middle; }
+.family-balance thead button { min-height: 36px; padding: 4px 10px; }
+.family-balance td .badge { width: 100%; min-width: 86px; justify-content: center; }
+.family-balance td .data-note { margin-top: 3px; font-size: .8rem; }
+.family-balance tr:last-child > * { border-bottom: 0; }
+.family-menu-action { width: 100%; }
+.family-meals { padding: 0; list-style: none; }
+.family-meals li + li { border-top: 1px solid var(--line); }
+.family-meal-button {
+  width: 100%;
+  justify-content: space-between;
+  text-align: left;
+  padding: 10px 8px;
+  gap: 12px;
+}
+.family-meal-copy { display: grid; gap: 4px; }
+.family-meal-arrow { font-size: 1.4rem; }
 #scenario-dialog {
   padding: 0;
   width: min(600px, calc(100% - 28px));
@@ -190,13 +269,13 @@
 #dialog-error { margin: 0 24px 24px; }
 #dialog-body > form { display: grid; gap: 13px; }
 .dialog-actions { justify-content: flex-end; }
-.feedback-preview { display: grid; gap: 12px; }
-.feedback-preview > div { display: grid; gap: 5px; }
+.meal-feedback-form { display: grid; gap: 12px; }
+.meal-feedback-form > section { display: grid; gap: 5px; }
 @keyframes reveal { from { opacity: 0; transform: translateY(6px); } }
-@media (max-width: 1080px) {
+@container device-layout (max-width: 1080px) {
   .family-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-@media (max-width: 760px) {
+@container device-layout (max-width: 760px) {
   .view { gap: 14px; }
   .grid-two, .menu-grid { grid-template-columns: minmax(0, 1fr); }
   .heading-row { align-items: start; gap: 8px; }
@@ -215,8 +294,10 @@
   .inventory-table td::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--muted); font-size: .78rem; }
   .inventory-table td:last-child { grid-column: 1 / -1; }
 }
-@media (max-width: 480px) {
+@container device-layout (max-width: 480px) {
   .family-grid, .scenario-controls, .recommendation-controls { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) {
   .dialog-heading { padding-left: 16px; }
   #dialog-body { padding: 16px; }
   #dialog-error { margin-inline: 16px; }

@@ -11,6 +11,7 @@ import random
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID
 from .integrations.cache import MemoryCache,RedisCache,DisabledCache,CacheUnavailable
 
@@ -59,11 +60,37 @@ class ReadResult:
     backend:str
 
 
+def _recipe_image_url(url):
+    if not isinstance(url, str) or not url or len(url) > 2048 or '\\' in url or any(ord(char) <= 32 for char in url):
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme not in ('http', 'https') or parts.netloc.lower() != 'www.foodsafetykorea.go.kr' or not parts.path:
+        return None
+    return parts._replace(scheme='https', fragment='').geturl()
+
+
+def _recipe_image(payload_json):
+    payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+    if not isinstance(payload, dict):
+        return None
+    metadata = payload.get('source_metadata')
+    original_url = metadata.get('ATT_FILE_NO_MAIN') if isinstance(metadata, dict) else None
+    return _recipe_image_url(payload.get('image_url') or original_url)
+
+
 def _validate(value):
     common={'kind','source','release_id','cache_version','external_id','name'}
     food={'basis_amount','basis_unit','nutrients'}
     recipe={'servings','cook_time_minutes','ingredients_text','steps','nutrition'}
     if not isinstance(value,dict) or value.get('kind') not in ('food','recipe'): raise ValueError('공개 자료 형식 오류')
+    if value['kind'] == 'recipe' and 'image_url' in value:
+        image = value['image_url']
+        if not image or _recipe_image_url(image) != image:
+            raise ValueError('공개 레시피 이미지 주소 오류')
+        recipe.add('image_url')
     fields=common|(food if value['kind']=='food' else recipe)
     if set(value)!=fields: raise ValueError('허용되지 않은 공개 자료 필드')
     cache_key(value['source'],value['release_id'],value['cache_version'],value['kind'],value['external_id'])
@@ -111,12 +138,37 @@ class PublicCatalog:
             result.update({'servings':row['servings'],'cook_time_minutes':row['cook_time_minutes'],'ingredients_text':row['ingredients_text'],
                 'steps':[r[0] for r in db.execute('SELECT instruction FROM catalog_recipe_steps WHERE release_id=? AND recipe_id=? ORDER BY step_no',(release,external_id))],
                 'nutrition':{r['nutrient']:{'amount':r['amount'],'basis_amount':r['basis_amount'],'basis_unit':r['basis_unit']} for r in db.execute('SELECT * FROM catalog_recipe_nutrients WHERE release_id=? AND recipe_id=?',(release,external_id))}})
+            if (image := self._recipe_image(db, release, external_id)):
+                result['image_url'] = image
         return _validate(result)
+
+    def _recipe_image(self, db, release, external_id):
+        payload = db.execute("""SELECT payload_json FROM source_records
+            WHERE release_id=? AND external_id=? AND kind='recipe'""", (release, external_id)).fetchone()
+        return _recipe_image(payload[0]) if payload else None
+
+    def _recipe_rows(self, db, release_id, limit, offset):
+        return db.execute("""SELECT r.external_id,r.name,s.payload_json FROM catalog_recipes r
+            JOIN source_records s
+              ON s.release_id=r.release_id AND s.external_id=r.external_id AND s.kind='recipe'
+            WHERE r.release_id=? ORDER BY r.external_id LIMIT ? OFFSET ?""",
+                          (release_id, limit, offset)).fetchall()
+
+    def recipe_page(self, db, offset):
+        limit = 6
+        release = self._pointer(db, 'mfds_recipe')
+        if not release:
+            return {'items': [], 'offset': offset, 'limit': limit, 'has_more': False}
+        rows = self._recipe_rows(db, release['release_id'], limit + 1, offset)
+        items = [{'external_id': row['external_id'], 'name': row['name'],
+                  'image_url': _recipe_image(row['payload_json'])} for row in rows[:limit]]
+        return {'items': items, 'offset': offset,
+                'limit': limit, 'has_more': len(rows) > limit}
 
     def read(self,db,source,kind,external_id):
         # Validate request before touching cache: no free text, IDs or health filters.
         if source not in SOURCES or kind not in ('food','recipe') or not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}',external_id): raise ValueError('공개 식품 ID 오류')
-        pointer=self._pointer(db,source)
+        pointer = self._pointer(db, source)
         if not pointer: raise PublicRecordMissing()
         release,version=pointer['release_id'],pointer['cache_version']
         key=cache_key(source,release,version,kind,external_id)

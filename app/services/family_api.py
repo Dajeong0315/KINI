@@ -3,7 +3,7 @@ from contextlib import closing
 from functools import wraps
 import sqlite3
 import time
-from typing import Annotated
+from typing import Annotated, Literal
 
 from flask import Blueprint, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
@@ -15,6 +15,7 @@ from .recommendation_repository import members, open_db
 api = Blueprint('families', __name__)
 TTL_SECONDS = 3600
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+Age = Annotated[int, Field(ge=0, le=130)]
 ProfileValue = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 
 
@@ -33,10 +34,20 @@ class HouseholdInput(BaseModel):
     name: Name
 
 
-class MemberInput(HouseholdInput):
-    age: int = Field(ge=0, le=130)
+class MemberUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    name: Name | None = None
+    age: Age | None = None
+    height_cm: float | None = Field(default=None, ge=0.1, le=300)
+    weight_kg: float | None = Field(default=None, ge=0.1, le=700)
+    activity_level: Literal['sedentary', 'low_active', 'active', 'very_active'] | None = None
     allergies: list[ProfileValue] = Field(default_factory=list, max_length=32)
     dislikes: list[ProfileValue] = Field(default_factory=list, max_length=32)
+
+
+class MemberInput(MemberUpdate):
+    name: Name = Field()
+    age: Age = Field()
 
 
 @api.after_request
@@ -140,13 +151,25 @@ def household_create(db, identity):
 @session_required()
 def household_get(db, identity, household_id):
     household = dict(db.execute('SELECT id,name FROM households WHERE id=?', (household_id,)).fetchone())
-    return jsonify({**household, 'role': identity['role'], 'members': members(db, household_id)})
+    return jsonify({**household, 'role': identity['role'], 'activity_level_supported': True,
+                    'members': members(db, household_id, include_physical_profile=True)})
 
 
 @api.get('/api/households/<int:household_id>/members')
 @session_required()
 def members_list(db, identity, household_id):
-    return jsonify({'household_id': household_id, 'members': members(db, household_id)})
+    return jsonify({'household_id': household_id, 'members': members(db, household_id, include_physical_profile=True)})
+
+
+def replace_member_foods(db, member_id, *, allergies, dislikes):
+    if allergies is not None:
+        db.execute('DELETE FROM member_allergies WHERE member_id=?', (member_id,))
+        db.executemany('INSERT INTO member_allergies(member_id,ingredient) VALUES (?,?)',
+                       [(member_id, value) for value in sorted(set(allergies))])
+    if dislikes is not None:
+        db.execute("DELETE FROM member_preferences WHERE member_id=? AND kind='dislike'", (member_id,))
+        db.executemany("INSERT INTO member_preferences(member_id,kind,value) VALUES (?,'dislike',?)",
+                       [(member_id, value) for value in sorted(set(dislikes))])
 
 
 @api.post('/api/households/<int:household_id>/members')
@@ -154,10 +177,32 @@ def members_list(db, identity, household_id):
 @session_required(write=True)
 def member_create(db, identity, household_id):
     obj = MemberInput.model_validate(request.get_json(silent=True))
-    member_id = db.execute('INSERT INTO members(household_id,name,age) VALUES (?,?,?)',
-                           (household_id, obj.name, obj.age)).lastrowid
-    db.executemany('INSERT INTO member_allergies(member_id,ingredient) VALUES (?,?)',
-                   [(member_id, value) for value in sorted(set(obj.allergies))])
-    db.executemany('INSERT INTO member_preferences(member_id,kind,value) VALUES (?,\'dislike\',?)',
-                   [(member_id, value) for value in sorted(set(obj.dislikes))])
-    return jsonify(members(db, household_id, [member_id])[0]), 201
+    member_id = db.execute('''INSERT INTO members(household_id,name,age,height_cm,weight_kg,activity_level)
+                              VALUES (?,?,?,?,?,?)''',
+                           (household_id, obj.name, obj.age, obj.height_cm, obj.weight_kg, obj.activity_level)).lastrowid
+    replace_member_foods(db, member_id, allergies=obj.allergies or None, dislikes=obj.dislikes or None)
+    return jsonify(members(db, household_id, [member_id], include_physical_profile=True)[0]), 201
+
+
+@api.patch('/api/households/<int:household_id>/members/<int:member_id>')
+@input_errors
+@session_required(write=True)
+def member_update(db, identity, household_id, member_id):
+    profile = MemberUpdate.model_validate(request.get_json(silent=True))
+    values = profile.model_dump(exclude_unset=True)
+    if (not values or not 0 < member_id <= 9223372036854775807
+            or any(key in values and values[key] is None for key in ('name', 'age'))):
+        return jsonify({'error': '요청 값의 형식을 확인해 주세요.'}), 400
+    # Serialize profile edits, including requests that only replace food lists.
+    lock = ' FOR NO KEY UPDATE' if getattr(db, 'is_postgres', False) else ''
+    scope = (household_id, member_id)
+    if not db.execute('SELECT 1 FROM members WHERE household_id=? AND id=?' + lock, scope).fetchone():
+        return jsonify({'error': '가족 구성원을 찾을 수 없습니다.'}), 404
+    allergies = values.pop('allergies', None)
+    dislikes = values.pop('dislikes', None)
+    if values:
+        # Remaining keys name member columns declared in MemberUpdate.
+        assignments = ', '.join(f'{column}=?' for column in values)
+        db.execute(f'UPDATE members SET {assignments} WHERE household_id=? AND id=?', (*values.values(), *scope))
+    replace_member_foods(db, member_id, allergies=allergies, dislikes=dislikes)
+    return jsonify(members(db, household_id, [member_id], include_physical_profile=True)[0])

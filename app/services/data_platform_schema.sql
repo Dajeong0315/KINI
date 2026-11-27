@@ -161,3 +161,14 @@ CREATE TABLE IF NOT EXISTS local_account_sessions (
 CREATE INDEX IF NOT EXISTS local_account_session_account ON local_account_sessions(account_id);
 CREATE INDEX IF NOT EXISTS local_account_session_expiry ON local_account_sessions(expires_at);
 INSERT OR IGNORE INTO platform_migrations(version) VALUES(3);
+
+CREATE TABLE IF NOT EXISTS meal_account_feedback (
+    record_id INTEGER NOT NULL REFERENCES meal_records(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+    taste TEXT CHECK (taste IN ('bad', 'okay', 'good')),
+    salt TEXT CHECK (salt IN ('bland', 'balanced', 'salty')),
+    difficulty TEXT CHECK (difficulty IN ('easy', 'normal', 'hard')),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (record_id, account_id),
+    CHECK (taste IS NOT NULL OR salt IS NOT NULL OR difficulty IS NOT NULL)
+);

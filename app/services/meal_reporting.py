@@ -8,6 +8,7 @@ from .recommendation_provider import NUTRIENTS
 
 KST = ZoneInfo('Asia/Seoul')
 UNITS = {'energy_kcal':'kcal', 'protein_g':'g', 'carbohydrate_g':'g', 'fat_g':'g', 'sodium_mg':'mg'}
+REGULAR_MEALS = {'breakfast', 'lunch', 'dinner'}
 
 
 def kst_today():
@@ -170,6 +171,75 @@ def _summary(records):
             'data_quality':'incomplete' if incomplete else 'recorded' if records else 'empty'}
 
 
+def _balance(records, targets, sodium_limits):
+    meals_by_day = {}
+    for record in records:
+        if any((item['servings'] or 0) > 0 for item in record['items']):
+            meals_by_day.setdefault(record['meal_date'], []).append(record)
+    complete_days = [
+        [item for meal in meals for item in meal['items']]
+        for meals in meals_by_day.values()
+        if REGULAR_MEALS <= {meal['meal_type'] for meal in meals}
+    ]
+    results = {}
+    for nutrient in (*NUTRIENTS, 'fiber_g'):
+        target = targets.get(nutrient)
+        if not records:
+            results[nutrient] = 'no_records'
+        elif nutrient == 'fiber_g' or all(
+            item['nutrition'][nutrient] is None for record in records for item in record['items']
+        ):
+            results[nutrient] = 'unavailable'
+        elif nutrient == 'sodium_mg':
+            results[nutrient] = _sodium_balance(meals_by_day, complete_days, target, sodium_limits)
+        elif not _number(target) or not target:
+            results[nutrient] = 'no_target'
+        else:
+            totals = [_sum(item['nutrition'][nutrient] for item in day) for day in complete_days]
+            if not totals or any(amount is None for amount in totals):
+                results[nutrient] = 'partial'
+            else:
+                average = math.fsum(amount / len(totals) for amount in totals)
+                results[nutrient] = 'below' if average < target else 'met'
+    return results, len(complete_days)
+
+
+def _sodium_balance(meals_by_day, complete_days, target, meal_limits):
+    nutrient = 'sodium_mg'
+    target = target if _number(target) and target > 0 else None
+    if target is None and not meal_limits:
+        return 'no_target'
+    meal_limit = min(meal_limits) if meal_limits else None
+    for meals in meals_by_day.values():
+        meal_totals = [_sum(item['nutrition'][nutrient] for item in meal['items']
+                            if _number(item['nutrition'][nutrient])) for meal in meals]
+        if meal_limit is not None and any(amount is not None and amount > meal_limit for amount in meal_totals):
+            return 'caution'
+        day_total = _sum(meal_totals)
+        if target is not None and day_total is not None and day_total > target:
+            return 'caution'
+    if not complete_days or any(_sum(item['nutrition'][nutrient] for item in day) is None for day in complete_days):
+        return 'partial'
+    return 'met'
+
+
+def _member_goals(db, household_id):
+    targets = {}
+    limits = {}
+    for row in db.execute('''SELECT t.member_id,t.nutrient,t.amount FROM member_nutrition_targets t
+        JOIN members m ON m.id=t.member_id WHERE m.household_id=?''', (household_id,)):
+        targets.setdefault(row['member_id'], {})[row['nutrient']] = row['amount']
+    for row in db.execute('''SELECT c.member_id,c.value FROM member_health_constraints c
+        JOIN members m ON m.id=c.member_id WHERE m.household_id=? AND c.kind='meal_sodium_max_mg' ''', (household_id,)):
+        try:
+            value = float(row['value'])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if _number(value):
+            limits.setdefault(row['member_id'], []).append(value)
+    return targets, limits
+
+
 def nutrition_report(db, household_id, start_date, end_date, *, member_id=None):
     rows, invalid = _period_rows(db,household_id,start_date,end_date,member_id)
     records = _hydrate(db,household_id,rows,member_id)
@@ -179,6 +249,7 @@ def nutrition_report(db, household_id, start_date, end_date, *, member_id=None):
         days.append({'date':day.isoformat(),**_summary([r for r in records if r['meal_date']==day.isoformat()])})
         day += timedelta(days=1)
     members = []
+    targets, limits = _member_goals(db, household_id) if member_id is None else ({}, {})
     for person in db.execute('SELECT id,name FROM members WHERE household_id=? ORDER BY id',(household_id,)):
         if member_id is not None and person['id']!=member_id: continue
         own = []
@@ -186,6 +257,10 @@ def nutrition_report(db, household_id, start_date, end_date, *, member_id=None):
             items = [i for i in record['items'] if i['member_id']==person['id']]
             if items:
                 own.append({**record,'items':items,'data_quality':'recorded' if all(i['data_quality']=='recorded' for i in items) else 'incomplete'})
-        members.append({'member_id':person['id'],'member_name':person['name'],**_summary(own)})
+        member_summary = {'member_id':person['id'],'member_name':person['name'],**_summary(own)}
+        if member_id is None:
+            balance, complete_day_count = _balance(own, targets.get(person['id'], {}), limits.get(person['id'], []))
+            member_summary.update(nutrition_balance=balance, complete_day_count=complete_day_count)
+        members.append(member_summary)
     if invalid: result['data_quality'] = 'incomplete'
     return {**result,'daily':days,'members':members,'excluded_invalid_timestamp_count':invalid}

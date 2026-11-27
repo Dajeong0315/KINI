@@ -90,7 +90,7 @@ _DUMMY_HASH = generate_password_hash('unused-' + secrets.token_hex(24))
 
 def authorize(db, token, *, household_id=None, write=False, now=None):
     current = int(time.time() if now is None else now)
-    query = '''SELECT s.account_id,s.household_id,h.role FROM auth_sessions s
+    query = '''SELECT s.account_id,s.household_id,h.role,s.expires_at FROM auth_sessions s
         JOIN local_accounts a ON a.id=s.account_id
         JOIN account_households h ON h.account_id=s.account_id AND h.household_id=s.household_id
         WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND a.active=TRUE'''
