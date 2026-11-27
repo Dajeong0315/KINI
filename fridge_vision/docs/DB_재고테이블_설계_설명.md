@@ -2,7 +2,7 @@
 
 > 대상: DB·ERD 담당 팀원, 화면(iPad·모니터) 개발자
 > 함께 보는 파일: [`supabase/schema.sql`](../supabase/schema.sql) (Supabase SQL Editor에 그대로 붙여넣어 실행)
-> 연동 코드: [`supabase_sync.py`](../supabase_sync.py) — 인식 결과를 이 DB에 저장·반영
+> 연동 코드: [`db/`](../db/)(supabase-py, 읽기·쓰기 키 분리) + [`supabase_sync.py`](../supabase_sync.py)(main.py 창구) — 인식 결과를 이 DB에 저장·반영
 > 상태: 초안 + fridge_vision 연동 반영 — 표시된 **[결정 필요]** 항목은 팀에서 확정해 주세요.
 
 ---
@@ -251,7 +251,7 @@ Supabase DB의 기본 시간대는 UTC라서, 소비기한 계산과 폐기 판�
 | 노트북 프로그램 (파이썬) | `service_role` 키 | 쓰기 + 함수 실행 |
 
 - 모든 테이블에 RLS(행 단위 보안)를 켜고, 화면용 읽기 정책만 열어 두었습니다.
-- **`service_role` 키는 노트북의 `.env`(`SUPABASE_KEY`)에만** 두세요. iPad 코드나 GitHub에 올라가면 누구나 DB를 바꿀 수 있습니다.
+- **Secret 키(`sb_secret_...`, `service_role`)는 노트북의 `.env`(`SUPABASE_SECRET_KEY`)에만** 두세요. iPad 코드나 GitHub에 올라가면 누구나 DB를 바꿀 수 있습니다. 화면·점검 도구의 읽기는 Publishable 키(`SUPABASE_PUBLISHABLE_KEY`)를 씁니다.
 - Supabase는 2026년 10월 30일부터 새로 만든 테이블을 API에 **자동으로 열어 주지 않습니다.** 그래서 `schema.sql`에 권한(GRANT)을 명시해 두었습니다. 테이블을 새로 추가할 때도 GRANT와 RLS를 같이 넣어야 합니다. 자동 증가 열의 시퀀스 권한도 `service_role`에 명시했습니다.
 - 이 DB에는 개인정보가 없어서 읽기를 모두 열어 두었습니다. **가족 프로필·식사 기록 테이블을 추가할 때는 읽기 정책을 따로 설계해야 합니다.** (KINI 아키텍처: Supabase = 비식별 운영 데이터)
 
@@ -266,12 +266,14 @@ Supabase DB의 기본 시간대는 UTC라서, 소비기한 계산과 폐기 판�
    select * from current_stock order by food_id;
    ```
 4. **Table Editor**에서 테이블 4개 모두 RLS가 켜져 있는지 확인합니다.
-5. **Project Settings → API**에서 Project URL과 `service_role` 키를 복사해 노트북의 `.env`에 넣습니다.
+5. **Project Settings → API Keys**에서 Project URL과 키를 복사해 노트북의 `.env`에 직접 넣습니다 (키 값은 코드·로그·git 에 남기지 않음).
    ```text
    SUPABASE_URL=https://프로젝트ID.supabase.co
-   SUPABASE_KEY=<service_role 키>
+   SUPABASE_PUBLISHABLE_KEY=<sb_publishable_ 키>
+   SUPABASE_SECRET_KEY=<sb_secret_ 키>
    SUPABASE_CONFIRM_MODE=local
    ```
+6. `python tools/check_supabase.py`로 읽기 점검 (표가 모두 "정상"이면 연결됨).
 
 다시 만들어야 할 때는 아래를 먼저 실행하고 2번부터 반복합니다.
 
@@ -283,9 +285,9 @@ drop table if exists public.fridge_stock, public.stock_event, public.capture, pu
 
 ---
 
-## 8. 노트북 프로그램(파이썬) 연동 — `supabase_sync.py`
+## 8. 노트북 프로그램(파이썬) 연동 — `db/` + `supabase_sync.py`
 
-추가 라이브러리 없이 Supabase REST API를 `requests`로 직접 호출합니다 (supabase-py 와 같은 요청).
+supabase-py 2.34.1 공식 클라이언트를 씁니다 (2026-11-27, 이전에는 `requests` 로 REST 직접 호출). 클라이언트는 **reader**(Publishable 키, 읽기)와 **writer**(Secret 키, 쓰기·함수)로 나뉩니다.
 
 | 프로그램 시점 | DB 작업 |
 |---|---|
@@ -293,12 +295,14 @@ drop table if exists public.fridge_stock, public.stock_event, public.capture, pu
 | 재고에 반영 (확인 필요 없음 → 자동, 또는 창에서 `y`) | 그 촬영의 pending 이벤트마다 `confirm_stock_event()` |
 | 거절 (창에서 `n`) | `reject_stock_event()` |
 | 영상 파일로 시험할 때 첫 촬영 | DB 재고(`current_stock`)를 카메라가 본 before 개수에 맞춤. 차이만큼 `source='manual'` 이벤트를 만들고 바로 확인 |
-| 목록에 없는 품목 (사용자가 새 이름을 붙임) | `food_item`에 자동 등록 후 이벤트 저장 |
+| 목록에 없는 품목 (새 인식 품목, 포장 글씨 이름 `pkg_*`, 사용자가 붙인 이름 `user_*`) | `food_item`에 자동 등록 후 이벤트 저장 (2026-11-27 결정). `unknown`·`unknown_package`·`packaged_food` 는 저장하지 않음 |
+| 데모 초기화 (`python main.py --reset-demo`) | `reset_demo()` (대기열을 먼저 비움) |
 
 - **iPad에서 확인하려면** `.env`의 `SUPABASE_CONFIRM_MODE=ipad`로 바꿉니다. 그러면 프로그램은 pending 이벤트만 저장하고, iPad가 `confirm_stock_event` / `reject_stock_event`를 호출합니다 (iPad는 anon 키라 함수 실행 권한이 없으므로, 노트북 서버를 거쳐 호출해야 합니다 — [결정 필요] 5번).
-- 전송은 별도 스레드에서 순서대로 합니다. 네트워크·서버 오류(5xx)면 작업을 `captures/supabase_queue.jsonl`에 보관했다가 다음 동기화 때 먼저 보냅니다.
+- 전송은 별도 스레드에서 순서대로 합니다. 네트워크·서버 오류(5xx)면 작업을 `state/db_outbox.jsonl`에 보관했다가 다음 촬영 때 먼저 보냅니다 (`python tools/flush_outbox.py` 로 바로 보낼 수도 있음). 요청 타임아웃 5초.
 - 모든 작업은 다시 보내도 결과가 같습니다: `capture`는 중복을 무시하고, 이벤트는 같은 `capture_id`로 이미 저장돼 있으면 다시 만들지 않으며, pending 이 아닌 이벤트는 다시 확인하지 않습니다.
-- 재고 부족(stock mismatch) 같은 4xx 오류는 다시 보내도 같으므로 보관하지 않고 로그만 남깁니다. 이벤트는 pending 으로 남습니다.
+- 재고 부족(stock mismatch)은 다시 보내도 같으므로 보관하지 않습니다. 이벤트는 pending 으로 남고, 프로그램은 '확인 필요'로 알립니다 (창 상태줄·로그).
+- 위치 이동(재인식에서 칸만 바뀐 경우)은 전용 함수가 없어 DB 에 쓰지 않고 로그(`logs/reid.jsonl`)에만 남깁니다.
 - 사진 파일은 올리지 않고 경로 문자열만 저장합니다.
 
 supabase-py로 같은 일을 하면 다음과 같습니다 (참고).
@@ -386,4 +390,17 @@ stock = sb.table("current_stock").select("*").execute().data
 | **h265 영상 전체 실행** (`main.py`) | capture 1행(4640ms), 이벤트 12건 모두 confirmed, 오렌지 1개 consumed. 최종 버터 1·수박 1·오렌지 2·포도 1·주스 2 |
 
 - 시험용 PostgreSQL(Windows pgserver)에는 시간대 데이터가 없어 `'Asia/Seoul'`을 같은 뜻인 `+09:00`으로 바꿔 실행했습니다 (한국은 서머타임 없음). Supabase에서는 `schema.sql`을 그대로 씁니다.
-- **실제 Supabase 프로젝트에서는 아직 실행해 보지 않았습니다.** 처음 실행할 때 오류가 나면 메시지를 공유해 주세요.
+### 실제 Supabase 검증 (2026-11-27)
+KINI Supabase 프로젝트(공개 카탈로그와 같은 프로젝트)의 SQL Editor 에서 `schema.sql` 을 그대로 실행했습니다 (`reset_demo()` 결과 5). 기존 카탈로그 테이블과 이름 충돌 없음.
+
+| 점검 (`tools/check_supabase.py`) | 결과 |
+|---|---|
+| 읽기 (Publishable 키): food_item 25행, current_stock 읽기 | 정상 (초기 재고 5개) |
+| Publishable 키로 이벤트 쓰기 / 함수 실행 | 둘 다 권한 거부 (정상) |
+| 쓰기 (`--write`, Secret 키): 우유 +1·브로콜리 −1 확인 | 우유 0→1, 브로콜리 1→0 |
+| 같은 capture_id 재전송 | 이벤트 중복 없음 |
+| 닭고기 −3 | stock mismatch → 재고 그대로, 이벤트 pending (확인 필요) |
+| 실제 인식 결과 (`samples/real_*.jpg`, 버터 꺼냄) | 시작 재고 맞추기 → `butter −1 (C,2)` 확인 → 버터 1→0, capture 1행 (latency 7630 ms) |
+| `python main.py --reset-demo` | 초기 재고 5개로 복원 |
+
+- 주의: 팀 카탈로그 테이블은 Publishable 키로 읽을 수 없게 잠겨 있지만, 이 재고 테이블들은 `schema.sql` 의 정책대로 Publishable 키로 **누구나 읽을 수 있습니다** (시연 화면용). 실제 가정의 재고를 넣는다면 읽기 정책을 바꿔야 합니다.

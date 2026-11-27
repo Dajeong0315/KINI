@@ -3,10 +3,10 @@
 1) 단위 시험: 결과 → stock_event 행 변환 (어디서나 실행)
 2) 통합 시험: 진짜 PostgreSQL(pgserver)에 schema.sql 을 그대로 실행하고,
    Supabase REST(PostgREST)의 필요한 부분만 흉내 낸 작은 서버가 요청을 SQL 로 바꿔
-   service_role(서버 키) / anon(화면 키) 역할로 실행 → 함수·권한·RLS·외래키를 실제로 검증
+   service_role(서버 키) / anon(화면 키) 역할로 실행 → supabase-py 클라이언트(db/)로 함수·권한·RLS·외래키를 실제로 검증
 
-통합 시험 준비 (Python 3.12 권장, 한 번만):  pip install pgserver "psycopg[binary]" python-dotenv requests
-실행:  python tests/test_supabase_sync.py
+통합 시험 준비 (Python 3.12 권장, 한 번만):  pip install pgserver "psycopg[binary]" python-dotenv supabase==2.34.1 pytest
+실행:  python -m pytest tests/test_supabase_sync.py -q   (pgserver·supabase 가 없으면 통합 시험은 건너뜀)
 """
 import json
 import sys
@@ -119,8 +119,11 @@ class MiniPostgrest(BaseHTTPRequestHandler):
         from psycopg.types.json import Jsonb
         u = urlparse(self.path)
         path = u.path.split("/rest/v1/")[1]
+        query = dict(parse_qsl(u.query))
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"null")
         prefer = self.headers.get("Prefer", "")
+        if not path.startswith("rpc/") and isinstance(body, dict):      # supabase-py: 1행이면 객체로 보냄
+            body = [body]
         if path.startswith("rpc/"):
             fn = path[4:]
 
@@ -136,8 +139,13 @@ class MiniPostgrest(BaseHTTPRequestHandler):
             params = [Jsonb(r[c]) if isinstance(r[c], (dict, list)) else r[c] for r in body for c in cols]
             s = sql.SQL("insert into {} ({}) values {}").format(
                 sql.Identifier("public", path), sql.SQL(",").join(map(sql.Identifier, cols)), vals)
+            target = query.get("on_conflict")
+            conflict = sql.SQL(" ({})").format(sql.Identifier(target)) if target else sql.SQL("")
             if "resolution=ignore-duplicates" in prefer:
-                s += sql.SQL(" on conflict do nothing")
+                s += sql.SQL(" on conflict") + conflict + sql.SQL(" do nothing")
+            elif "resolution=merge-duplicates" in prefer:           # upsert → 같은 키면 덮어쓰기
+                s += sql.SQL(" on conflict") + conflict + sql.SQL(" do update set ") + sql.SQL(",").join(
+                    sql.SQL("{} = excluded.{}").format(sql.Identifier(c), sql.Identifier(c)) for c in cols if c != target)
             if "return=representation" in prefer:
                 s += sql.SQL(" returning *")
             return s, params
@@ -187,19 +195,34 @@ def test_integration():
     try:
         import pgserver  # noqa: F401
         import psycopg  # noqa: F401
+        import supabase  # noqa: F401
     except ImportError:
-        print("  (통합 시험 생략: pip install pgserver \"psycopg[binary]\" 필요)")
-        return
+        try:
+            import pytest
+        except ImportError:
+            print('  (통합 시험 생략: pip install pgserver "psycopg[binary]" supabase 필요)')
+            return
+        pytest.skip('통합 시험 생략: pip install pgserver "psycopg[binary]" supabase 필요 (Python 3.12 권장)')
+    from db.repository import Repository
+    from db.supabase_client import Clients, make_reader, make_writer
+    sys.path.insert(0, str(ROOT / "tools"))
+    import check_supabase as cs
+
     srv, conn, api, url, tmp = start_db_and_api()
-    config.SUPABASE_QUEUE_FILE = tmp / "queue.jsonl"
+    saved = (config.SUPABASE_OLD_QUEUE_FILE, config.SUPABASE_CONFIRM_MODE)
+    config.SUPABASE_OLD_QUEUE_FILE, config.SUPABASE_CONFIRM_MODE = tmp / "old.jsonl", "local"
+    outbox = tmp / "state" / "db_outbox.jsonl"
     logs = []
     log = lambda m: (logs.append(m), print("   ", m))
+    added_user_item = "user_1" not in config.ITEMS
     try:
         # 0) schema.sql 초기 상태: 25개 품목, 두부·달걀·브로콜리·버섯·닭고기 1
         assert conn.execute("select count(*) from food_item").fetchone()[0] == 25
         assert stock(conn) == {"tofu": 1, "egg": 1, "broccoli": 1, "mushroom": 1, "chicken": 1}
 
-        sync = ss.InventorySync(log=log, db=ss.SupabaseREST(url, SERVICE_KEY), baseline=True)
+        writer, reader = make_writer(url=url, key=SERVICE_KEY), make_reader(url=url, key=ANON_KEY)
+        repo = Repository(Clients(reader=reader, writer=writer), log=log)
+        sync = ss.InventorySync(log=log, repo=repo, baseline=True, outbox=outbox)
         before = {k: 0 for k in config.ITEMS} | {"butter": 1, "watermelon": 1, "orange": 3, "grape": 1, "juice": 2}
         r1 = {"capture_id": "cap-1", "source": "yolo:yoloe-v8m-seg.pt", "latency_sec": 0.82,
               "needs_confirmation": False, "before": before,
@@ -211,31 +234,34 @@ def test_integration():
         assert stock(conn) == {"butter": 1, "watermelon": 1, "orange": 3, "grape": 1, "juice": 2}, stock(conn)
         ev = conn.execute("select food_id, delta_qty, loc_x, loc_y, status from stock_event where capture_id='cap-1'").fetchall()
         assert ev == [("orange", -1, "R", 1, "pending")], ev
-        cap = conn.execute("select engine, latency_ms, result_json->>'capture_id' from capture").fetchone()
-        assert cap == ("yolo:yoloe-v8m-seg.pt", 820, "cap-1"), cap
-        # 데모 5종 −1 ×5, 버터·수박·포도·주스 4건, 오렌지는 칸별(R,1 ×2 / R,2 ×1) 2건 = 11건
+        cap = conn.execute("select engine, latency_ms, result_json->>'capture_id', before_path from capture").fetchone()
+        assert cap == ("yolo:yoloe-v8m-seg.pt", 820, "cap-1", "captures/cap-1/before.jpg"), cap
         assert conn.execute("select count(*) from stock_event where source='manual'").fetchone()[0] == 11
         assert conn.execute("select count(*) from fridge_stock where food_id='orange' and date_out is null"
                             " and loc_x='R' and loc_y=1").fetchone()[0] == 2
+        # 같은 결과를 다시 보내도(재시도) 이벤트·capture 가 늘지 않음
+        sync.record(r1).result()
+        assert conn.execute("select count(*) from stock_event where capture_id='cap-1'").fetchone()[0] == 1
+        assert conn.execute("select count(*) from capture").fetchone()[0] == 1
 
-        # 2) 재고 반영(confirm) → 오렌지 3 → 2, 가장 먼저 들어온 것 consumed
+        # 2) 확인 → 오렌지 3 → 2. 같은 확인을 다시 보내도 두 번 반영되지 않음
         sync.decide(r1, "confirm").result()
         assert stock(conn)["orange"] == 2
         assert conn.execute("select status from stock_event where capture_id='cap-1'").fetchone()[0] == "confirmed"
-        # 같은 결정이 다시 와도(재전송) 두 번 반영되지 않음
         sync.decide(r1, "confirm").result()
         assert stock(conn)["orange"] == 2
 
-        # 3) 재고보다 많이 빼기 → 함수가 거부, 이벤트 pending 유지, 재고 그대로
+        # 3) 재고보다 많이 빼기 → 함수가 거부, 이벤트 pending 유지, 재고 그대로, '확인 필요' 알림
         r2 = {"capture_id": "cap-2", "source": "yolo", "added": [],
               "removed": [{"item_id": "watermelon", "name": "수박", "quantity": 3, "locations": []}]}
         sync.record(r2).result()
         sync.decide(r2, "confirm").result()
         assert stock(conn)["watermelon"] == 1
         assert conn.execute("select status from stock_event where capture_id='cap-2'").fetchone()[0] == "pending"
-        assert any("stock mismatch" in m for m in logs)
+        alerts = sync.pop_alerts()
+        assert len(alerts) == 1 and "stock mismatch" in alerts[0]["reason"], alerts
 
-        # 4) 거절(reject) → 재고 변화 없음
+        # 4) 거절 → 재고 변화 없음
         r3 = {"capture_id": "cap-3", "source": "yolo", "removed": [],
               "added": [{"item_id": "milk", "name": "우유", "quantity": 1, "locations": ["L,1"]}]}
         sync.record(r3).result()
@@ -243,43 +269,54 @@ def test_integration():
         assert "milk" not in stock(conn)
         assert conn.execute("select status from stock_event where capture_id='cap-3'").fetchone()[0] == "rejected"
 
-        # 5) 사용자가 붙인 새 품목(user_1) → food_item 자동 등록 후 반영, 칸 기록
-        config.ITEMS["user_1"] = {"name": "올리브오일", "description": "", "user": True}
+        # 5) DB 에 없는 라벨: 사용자 이름(user_*)·새 품목 → food_item 자동 추가 / unknown_package → 저장 안 함
+        config.ITEMS.setdefault("user_1", {"name": "올리브오일", "description": "", "user": True})
+        name1 = config.ITEMS["user_1"]["name"]
         r4 = {"capture_id": "cap-4", "source": "yolo", "removed": [],
-              "added": [{"item_id": "user_1", "name": "올리브오일", "quantity": 1, "locations": ["L,2"]}]}
+              "added": [{"item_id": "user_1", "name": name1, "quantity": 1, "locations": ["L,2"]},
+                        {"item_id": "banana", "name": "바나나", "quantity": 1, "locations": []},
+                        {"item_id": "unknown_package", "name": "포장 식품", "quantity": 1, "locations": []}]}
         sync.record(r4).result()
         sync.decide(r4, "confirm").result()
-        assert stock(conn)["user_1"] == 1
+        assert stock(conn)["user_1"] == 1 and stock(conn)["banana"] == 1
+        assert conn.execute("select food_name, shelf_days from food_item where food_id='user_1'").fetchone() == \
+            (name1, config.SUPABASE_DEFAULT_SHELF_DAYS)
+        assert conn.execute("select count(*) from food_item where food_id like 'unknown%'").fetchone()[0] == 0
         assert conn.execute("select loc_x, loc_y from fridge_stock where food_id='user_1'").fetchone() == ("L", 2)
 
-        # 6) 네트워크 장애 → 보관 → 복구 후 순서대로 재전송
-        sync.worker.db.base = "http://127.0.0.1:9/rest/v1"          # 닫힌 포트
-        sync.worker.db.timeout = 1
+        # 6) 네트워크 장애 → 대기열 → 복구 후 다음 촬영 때 순서대로 재전송
+        repo.clients._writer = make_writer(url="http://127.0.0.1:9", key=SERVICE_KEY, timeout=1)   # 닫힌 포트
         r5 = {"capture_id": "cap-5", "source": "yolo", "removed": [],
               "added": [{"item_id": "apple", "name": "사과", "quantity": 2, "locations": ["C,1", "C,1"]}]}
         sync.record(r5).result()
         sync.decide(r5, "confirm").result()
-        assert config.SUPABASE_QUEUE_FILE.exists() and len(config.SUPABASE_QUEUE_FILE.read_text(encoding="utf-8").splitlines()) == 2
-        sync.worker.db.base = f"{url}/rest/v1"
+        assert sync.outbox_count() == 2
+        assert SERVICE_KEY not in outbox.read_text(encoding="utf-8")
+        repo.clients._writer = writer
         r6 = {"capture_id": "cap-6", "source": "yolo", "added": [], "removed": []}
         sync.record(r6).result()
-        assert not config.SUPABASE_QUEUE_FILE.exists()
+        assert sync.outbox_count() == 0 and not outbox.exists()
         assert stock(conn)["apple"] == 2
 
-        # 7) 화면용 anon 키: 읽기는 되고, 쓰기·함수 실행은 거부
-        anon = ss.SupabaseREST(url, ANON_KEY)
-        assert len(anon.select("current_stock", {"select": "food_id,qty"})) == 26
-        for call in (lambda: anon.insert("stock_event", [{"food_id": "milk", "delta_qty": 1}]),
-                     lambda: anon.rpc("reset_demo", {})):
-            try:
-                call()
-                raise AssertionError("anon 쓰기가 허용됨")
-            except ss.SupabaseError as e:
-                assert e.status == 401, e
+        # 7) 읽기 함수 (Publishable 키) + 점검 도구 읽기 점검: anon 쓰기·함수 실행 거부
+        assert len(repo.get_current_stock()) == 27
+        assert [e["food_id"] for e in repo.get_pending_events()] == ["watermelon"]
+        assert cs.read_checks(reader) is True, cs.ROWS
+        cs.ROWS.clear()
+
+        # 8) 점검 도구 쓰기 점검 (reset_demo → 우유 +1·브로콜리 −1 → 닭고기 −3 mismatch → reset_demo)
+        assert cs.write_checks(repo) is True, cs.ROWS
+        cs.ROWS.clear()
+        assert stock(conn) == {"tofu": 1, "egg": 1, "broccoli": 1, "mushroom": 1, "chicken": 1}
+        assert conn.execute("select count(*) from stock_event").fetchone()[0] == 0
+        assert not any(SERVICE_KEY in m or ANON_KEY in m for m in logs)
 
         sync.close()
         print("    최종 재고:", stock(conn))
     finally:
+        config.SUPABASE_OLD_QUEUE_FILE, config.SUPABASE_CONFIRM_MODE = saved
+        if added_user_item:
+            config.ITEMS.pop("user_1", None)
         api.shutdown()
         conn.close()
         srv.cleanup()

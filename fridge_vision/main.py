@@ -225,9 +225,15 @@ def run_stream(args) -> None:
     cap, is_file, fps, warmup, stop_at = open_source(args.source)
     sync = None
     if not args.no_sync and args.engine != "mock":   # mock(가짜 결과)은 실제 DB 에 보내지 않음
-        from supabase_sync import InventorySync
-        b = config.SUPABASE_BASELINE_ON_START
-        sync = InventorySync(log=log, baseline=is_file if b == "auto" else bool(b))
+        # KINI 개인 재고는 로컬 SQLite(A 재고 이벤트 API)가 기준 → KINI_API_URL 이 있으면 그쪽으로만 보냄
+        from kini_inventory_sink import sink_from_env
+        sync = sink_from_env(config.CAPTURE_DIR / "kini_queue.jsonl", log=log)
+        if sync is not None:
+            log("재고 연동: KINI A 재고 이벤트 API (로컬 SQLite). 확정은 앱에서 재료·중량 확인 후")
+        elif config.SUPABASE_URL:
+            from supabase_sync import InventorySync
+            b = config.SUPABASE_BASELINE_ON_START
+            sync = InventorySync(log=log, baseline=is_file if b == "auto" else bool(b))
     det = DoorEventDetector()
     pool = ThreadPoolExecutor(max_workers=1)
     pending = None          # (future, after_frame, capture_dir)
@@ -327,6 +333,12 @@ def run_stream(args) -> None:
         elif event and busy:
             log("문 닫힘 감지됐지만 이전 분석이 끝나지 않아 무시")
 
+        # DB 알림: 재고보다 많이 빼는 결과(stock mismatch) → 재고는 그대로, 이벤트 pending → 확인 필요
+        for a in (sync.pop_alerts() if hasattr(sync, "pop_alerts") else []):
+            log(f"확인 필요 (DB 재고 불일치): {a['food_id']} {a['delta_qty']:+d} — 이벤트 {a['event_id']} pending 유지. "
+                f"화면에서 수정하거나 거절해 주세요 ({a['reason']})")
+            status = f"CHECK NEEDED: DB stock mismatch {a['food_id']} {a['delta_qty']:+d}"
+
         # Vision 결과 수신
         if pending and pending[0].done():
             fut, after_frame, out = pending
@@ -344,6 +356,9 @@ def run_stream(args) -> None:
                 save_json(out / "result.json", result)
                 if sync is not None:
                     sync.record(result)      # Supabase: capture + stock_event(pending)
+                    n_wait = sync.outbox_count() if hasattr(sync, "outbox_count") else 0
+                    if n_wait:
+                        log(f"DB 저장 대기 중 {n_wait}건 (연결되면 다음 촬영 때 다시 보냄, 또는 python tools/flush_outbox.py)")
                 if result["needs_confirmation"] and not args.no_window:
                     result["_pending"] = True
                     awaiting = (result, after_frame)
@@ -428,9 +443,25 @@ def main() -> None:
     p.add_argument("--mock", action="store_true", help="--engine mock 과 같음 (가짜 인식 결과)")
     p.add_argument("--no-window", action="store_true", help="화면 창 없이 실행 (확인 필요 결과도 자동 반영)")
     p.add_argument("--loop", action="store_true", help="영상 파일을 반복 재생")
-    p.add_argument("--no-sync", action="store_true", help="Supabase 재고 테이블에 보내지 않음")
+    p.add_argument("--no-sync", action="store_true", help="재고 이벤트를 보내지 않음 (KINI A API / Supabase)")
     p.add_argument("--compare", nargs=2, metavar=("BEFORE", "AFTER"), help="사진 2장만 비교")
+    p.add_argument("--reset-reid", action="store_true",
+                   help="데모 초기화: 냉장고 안 물체 목록(state/tracks.json)을 비움 (등록 갤러리는 남김). 단독으로 쓰면 비우고 끝냄")
+    p.add_argument("--reset-demo", action="store_true",
+                   help="데모 초기화: Supabase reset_demo() (촬영·이벤트·재고 기록을 지우고 초기 재고로) + 재인식 트랙 비움. "
+                        "실제 DB 를 바꿈. 단독으로 쓰면 초기화하고 끝냄")
     args = p.parse_args()
+    if args.reset_demo:
+        from supabase_sync import InventorySync
+        n = InventorySync(log=log).reset_demo()
+        log(f"Supabase 데모 초기화 완료: 초기 재고 {n}개")
+        args.reset_reid = True
+    if args.reset_reid:
+        from reid.tracks import TrackStore
+        TrackStore(config.REID_STATE_FILE).reset()
+        log(f"재인식 트랙 초기화: {config.REID_STATE_FILE}")
+        if all(a in ("--reset-reid", "--reset-demo") for a in sys.argv[1:]):     # 초기화만 하고 끝냄
+            return
     if args.mock:
         args.engine = "mock"
     if args.compare:

@@ -1,269 +1,182 @@
-"""인식 결과를 Supabase 고내 재고 DB(supabase/schema.sql)에 반영.
+"""인식 결과를 Supabase 고내 재고 DB(supabase/schema.sql)에 반영 — main.py 가 쓰는 창구.
 
-DB 구조 (docs/DB_재고테이블_설계_설명.md)
-  food_item    식재료 목록 (food_id = config.ITEMS 의 item_id)
-  capture      촬영 1회 = 1행 (AI 결과 원본)
-  stock_event  "오렌지 −1" 같은 변경 후보. pending → confirmed / rejected
-  fridge_stock 실제 재고, 식재료 1개 = 1행 (date_out 이 NULL 이면 냉장고 안)
-  confirm_stock_event() / reject_stock_event()  — 재고 반영은 반드시 이 함수로 (한 트랜잭션)
-
-이 프로그램이 하는 일
-  1) 인식 결과가 나오면      capture 1행 + stock_event(pending) 품목·칸별 1행씩 저장
-  2) 재고에 반영하면(y/자동)  그 촬영의 pending 이벤트마다 confirm_stock_event()
-     거절하면(n)              reject_stock_event()
+이 프로그램이 하는 일 (실제 DB 작업은 db/repository.py)
+  1) 인식 결과가 나오면        capture 1행 + stock_event(pending) 품목·칸별 1행씩 저장
+  2) 재고에 반영하면(자동/y)    그 촬영의 pending 이벤트마다 confirm_stock_event()
+     거절하면(n)               reject_stock_event()
      config.SUPABASE_CONFIRM_MODE = "ipad" 이면 2)는 하지 않고 iPad 확인을 기다림
+     재고보다 많이 빼는 결과(stock mismatch)는 재고를 바꾸지 않고 pending 으로 남김 → alerts 로 '확인 필요' 알림
   3) (영상 파일 시험 등) 첫 촬영 때 DB 재고가 카메라가 본 before 와 다르면
      source='manual' 이벤트로 맞춘 뒤 시작 (config.SUPABASE_BASELINE_ON_START)
 
-Supabase REST(PostgREST)를 requests 로 직접 호출 — 추가 라이브러리 불필요.
-모든 작업은 다시 실행해도 결과가 같도록(멱등) 만들었고, 네트워크·서버 오류면
-captures/supabase_queue.jsonl 에 순서대로 보관했다가 다음 동기화 때 먼저 보냄.
-사진·사용자 정보는 보내지 않음 (사진 경로 문자열과 AI 결과 JSON 만).
+DB 가 안 될 때도 시연은 멈추지 않음: 전송은 별도 스레드 1개에서 순서대로 하고, 네트워크·서버 오류면
+state/db_outbox.jsonl 에 쌓았다가 다음 촬영 때(또는 tools/flush_outbox.py) 먼저 다시 보냄.
+모든 작업은 다시 보내도 결과가 같음 (capture 덮어쓰기, 같은 촬영의 이벤트는 한 번만, pending 이 아닌 이벤트는 건너뜀).
+사진은 기본으로 올리지 않음 (UPLOAD_PHOTOS=false → 로컬 상대 경로만 저장).
 """
 from __future__ import annotations
 
 import json
 import threading
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Callable
 
-import requests
-
 import config
-
-
-class SupabaseError(RuntimeError):
-    def __init__(self, status: int, message: str):
-        super().__init__(f"HTTP {status}: {message}")
-        self.status = status
-        self.message = message
-
-    @property
-    def retryable(self) -> bool:
-        """서버·네트워크 문제면 나중에 다시 보냄. 4xx(재고 부족·형식 오류 등)는 다시 보내도 같으므로 보관 안 함."""
-        return self.status >= 500 or self.status in (408, 429)
-
-
-class SupabaseREST:
-    """Supabase REST(PostgREST) 최소 호출."""
-
-    def __init__(self, url: str, key: str, timeout: float = 5.0) -> None:
-        self.base = f"{url.rstrip('/')}/rest/v1"
-        self.timeout = timeout
-        self.s = requests.Session()
-        self.s.headers.update({"apikey": key, "Authorization": f"Bearer {key}",
-                               "Content-Type": "application/json"})
-
-    def _do(self, method: str, path: str, *, params=None, body=None, prefer: str | None = None):
-        headers = {"Prefer": prefer} if prefer else {}
-        data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
-        r = self.s.request(method, f"{self.base}/{path}", params=params, data=data,
-                           headers=headers, timeout=self.timeout)
-        if r.status_code >= 300:
-            try:
-                msg = r.json().get("message") or r.text
-            except ValueError:
-                msg = r.text
-            raise SupabaseError(r.status_code, str(msg)[:300])
-        return r.json() if r.content else None
-
-    def select(self, table: str, params: dict) -> list[dict]:
-        return self._do("GET", table, params=params)
-
-    def insert(self, table: str, rows: list[dict], *, ignore_duplicates=False, returning=False):
-        prefer = ["return=representation" if returning else "return=minimal"]
-        if ignore_duplicates:
-            prefer.append("resolution=ignore-duplicates")
-        return self._do("POST", table, body=rows, prefer=",".join(prefer))
-
-    def rpc(self, fn: str, args: dict):
-        return self._do("POST", f"rpc/{fn}", body=args)
-
-
-# ---------------------------------------------------------------------------
-# 결과 → 이벤트
-# ---------------------------------------------------------------------------
-def _split_loc(loc: str | None):
-    """'R,1' → ('R', 1). 모르면 (None, None)."""
-    if not loc:
-        return None, None
-    x, y = loc.split(",")
-    return x, int(y)
+from db.repository import DbError, Repository, events_from_changes
 
 
 def events_from_result(result: dict) -> list[dict]:
-    """추가·제거 → stock_event 행. 같은 품목이라도 칸이 다르면 칸마다 1행 (칸을 모르면 칸 없이 1행)."""
-    rows = []
-    for key, sign in (("added", 1), ("removed", -1)):
-        for e in result.get(key, []):
-            locs = list(e.get("locations") or [])[:e["quantity"]]
-            groups = Counter(locs)
-            if len(locs) < e["quantity"]:
-                groups[None] += e["quantity"] - len(locs)
-            for loc, n in groups.items():
-                x, y = _split_loc(loc)
-                rows.append({"capture_id": result["capture_id"], "food_id": e["item_id"],
-                             "delta_qty": sign * n, "loc_x": x, "loc_y": y, "source": "vision"})
+    """(예전 이름 호환) 결과의 추가·제거 → stock_event 행."""
+    rows, _ = events_from_changes(result.get("capture_id"), result.get("added"), result.get("removed"))
     return rows
 
 
-def capture_row(result: dict) -> dict:
-    cid = result["capture_id"]
-    clean = {k: v for k, v in result.items() if not k.startswith("_")}
-    latency = result.get("latency_sec")
-    return {
-        "capture_id": cid,
-        "engine": result.get("source", "unknown"),
-        "before_path": f"captures/{cid}/before.jpg",     # 사진은 노트북 로컬에만 (Storage 업로드는 팀 결정 후)
-        "after_path": f"captures/{cid}/after.jpg",
-        "result_json": clean,
-        "needs_confirmation": bool(result.get("needs_confirmation")),
-        "latency_ms": int(latency * 1000) if isinstance(latency, (int, float)) else None,
-    }
-
-
-# ---------------------------------------------------------------------------
-# 작업 실행 (모두 멱등)
-# ---------------------------------------------------------------------------
 class Worker:
-    def __init__(self, db: SupabaseREST, log: Callable[[str], None]) -> None:
-        self.db = db
+    """작업 1개 실행 (모두 멱등)."""
+
+    def __init__(self, repo: Repository, log: Callable[[str], None], alert: Callable[[dict], None]) -> None:
+        self.repo = repo
         self.log = log
-        self.known_items: set[str] | None = None
+        self.alert = alert
 
-    def ensure_items(self, food_ids) -> None:
-        """food_item 에 없는 품목(사용자가 이름 붙인 새 품목 등)을 추가 — stock_event 외래키 때문."""
-        if self.known_items is None:
-            self.known_items = {r["food_id"] for r in self.db.select("food_item", {"select": "food_id"})}
-        missing = [k for k in dict.fromkeys(food_ids) if k not in self.known_items]
-        if not missing:
-            return
-        if not config.SUPABASE_REGISTER_MISSING_ITEMS:
-            raise SupabaseError(400, f"food_item 에 없는 품목: {missing} (SUPABASE_REGISTER_MISSING_ITEMS=False)")
-        self.db.insert("food_item", [{
-            "food_id": k, "food_name": config.ITEMS.get(k, {}).get("name", k),
-            "shelf_days": config.SUPABASE_DEFAULT_SHELF_DAYS, "demo_init_qty": 0} for k in missing],
-            ignore_duplicates=True)
-        self.known_items.update(missing)
-        self.log(f"Supabase: food_item 에 새 품목 등록 {missing} (shelf_days={config.SUPABASE_DEFAULT_SHELF_DAYS} 임시값)")
-
-    def record(self, result: dict) -> list[dict]:
-        """capture + stock_event(pending) 저장. 이미 저장된 촬영이면 기존 이벤트를 돌려줌."""
-        cid = result["capture_id"]
-        self.db.insert("capture", [capture_row(result)], ignore_duplicates=True)
-        rows = self.db.select("stock_event", {"select": "event_id,food_id,delta_qty,status",
-                                              "capture_id": f"eq.{cid}", "order": "event_id.asc"})
-        if rows:
-            return rows
-        new = events_from_result(result)
-        if not new:
-            self.log(f"Supabase: 촬영 기록 저장 ({cid}, 변화 없음)")
-            return []
-        self.ensure_items(r["food_id"] for r in new)
-        rows = self.db.insert("stock_event", new, returning=True)
-        self.log(f"Supabase: 촬영 기록 + 변경 후보 {len(rows)}건 저장 (pending) — "
-                 + ", ".join(f"{r['food_id']} {r['delta_qty']:+d}" for r in rows))
-        return rows
-
-    def decide(self, events: list[dict], decision: str) -> None:
-        fn = "confirm_stock_event" if decision == "confirm" else "reject_stock_event"
-        for ev in events:
-            if ev["status"] != "pending":
-                continue                       # 이미 처리됨 (재전송) → 건너뜀
-            try:
-                moved = self.db.rpc(fn, {"p_event_id": ev["event_id"]})
-                ev["status"] = "confirmed" if decision == "confirm" else "rejected"
-                self.log(f"Supabase: {ev['food_id']} {ev['delta_qty']:+d} → "
-                         + (f"재고 반영 ({moved}개)" if decision == "confirm" else "거절"))
-            except SupabaseError as e:
-                if e.retryable:
-                    raise
-                # 예: 재고보다 많이 빼려 함(stock mismatch) → 이벤트는 pending 으로 남겨 화면에서 수정·거절
-                self.log(f"Supabase: {ev['food_id']} {ev['delta_qty']:+d} 반영 안 됨 (pending 유지): {e.message}")
-
-    def baseline(self, before: dict, locations: dict) -> None:
-        """DB 재고를 카메라가 본 before 개수에 맞춤 (source='manual' 이벤트 → 바로 확인)."""
-        current = {r["food_id"]: r["qty"] for r in self.db.select("current_stock", {"select": "food_id,qty"})}
-        rows = []
-        for k, n in before.items():
-            diff = n - current.get(k, 0)
-            if diff == 0 or (k not in current and n == 0):
+    def _photo_paths(self, cid: str):
+        """UPLOAD_PHOTOS 가 켜져 있으면 Storage 에 올리고 그 경로, 아니면 None (→ 로컬 상대 경로)."""
+        if not config.UPLOAD_PHOTOS:
+            return None, None
+        paths = []
+        for name in ("before.jpg", "after.jpg"):
+            f = config.CAPTURE_DIR / cid / name
+            if not f.exists():
+                paths.append(None)
                 continue
-            locs = locations.get(k, []) if diff > 0 else []
-            res = {"capture_id": None, "added": [], "removed": []}
-            res["added" if diff > 0 else "removed"].append({"item_id": k, "quantity": abs(diff), "locations": locs})
-            for r in events_from_result(res):
-                rows.append({**r, "source": "manual"})
-        if not rows:
-            self.log("Supabase: DB 재고가 첫 before 사진과 같음 → 맞출 것 없음")
+            key = f"{cid}/{name}"
+            try:
+                self.repo.clients.writer.storage.from_(config.SUPABASE_PHOTO_BUCKET).upload(
+                    key, f.read_bytes(), {"content-type": "image/jpeg", "upsert": "true"})
+            except Exception as e:  # noqa: BLE001
+                from db.repository import classify
+                raise classify(e) from None
+            paths.append(f"storage:{config.SUPABASE_PHOTO_BUCKET}/{key}")
+        return paths[0], paths[1]
+
+    def baseline(self, before: dict, locations: dict, names: dict | None = None) -> None:
+        """DB 재고를 카메라가 본 before 개수에 맞춤 (source='manual' 이벤트 → 바로 확인)."""
+        rows = self.repo._exec(self.repo.clients.writer.table("current_stock").select("food_id,qty")).data
+        current = {r["food_id"]: r["qty"] for r in rows}
+        added, removed = [], []
+        for k, n in before.items():
+            if k in config.SUPABASE_EXCLUDE_LABELS:
+                continue
+            diff = n - current.get(k, 0)
+            if diff == 0 or (k not in current and n <= 0):
+                continue
+            (added if diff > 0 else removed).append(
+                {"item_id": k, "quantity": abs(diff), "locations": locations.get(k, []) if diff > 0 else []})
+        if not added and not removed:
+            self.log("DB: DB 재고가 첫 before 사진과 같음 → 맞출 것 없음")
             return
-        self.ensure_items(r["food_id"] for r in rows)
-        events = self.db.insert("stock_event", rows, returning=True)
-        self.log("Supabase: 시작 재고를 카메라(before)에 맞춤 — "
-                 + ", ".join(f"{r['food_id']} {r['delta_qty']:+d}" for r in events))
-        self.decide(events, "confirm")
+        events = self.repo.create_events(None, added, removed, source="manual", names=names)
+        self.log("DB: 시작 재고를 카메라(before)에 맞춤 — " + ", ".join(f"{r['food_id']} {r['delta_qty']:+d}" for r in events))
+        for ev in events:
+            res = self.repo.confirm_event(ev["event_id"])
+            if not res["ok"]:
+                self.log(f"DB: 시작 재고 맞추기 실패 {ev['food_id']} {ev['delta_qty']:+d}: {res['reason']}")
 
     def run(self, job: dict) -> None:
         if job["type"] == "baseline":
-            self.baseline(job["before"], job.get("locations", {}))
+            self.baseline(job["before"], job.get("locations", {}), job.get("names"))
             return
-        events = self.record(job["result"])
-        if job.get("decision"):
-            self.decide(events, job["decision"])
+        result = job["result"]
+        cid = result["capture_id"]
+        before_path, after_path = self._photo_paths(cid)
+        self.repo.record_capture(result, before_path, after_path)
+        events = self.repo.create_events(cid, result.get("added"), result.get("removed"))
+        if not events:
+            self.log(f"DB: 촬영 기록 저장 ({cid}, 재고 변화 없음)")
+        if job.get("decision") and events:
+            for res in self.repo.decide_capture(cid, job["decision"]):
+                if not res["ok"] and res.get("needs_confirmation"):
+                    self.alert({"capture_id": cid, **res})
 
 
 class InventorySync:
     """main.py 에서 쓰는 창구. 호출은 바로 돌아오고 실제 전송은 백그라운드 스레드 1개에서 순서대로."""
 
-    def __init__(self, log: Callable[[str], None] = print, db: SupabaseREST | None = None,
-                 baseline: bool = False) -> None:
+    def __init__(self, log: Callable[[str], None] = print, repo: Repository | None = None,
+                 baseline: bool = False, outbox: Path | None = None) -> None:
+        from db.supabase_client import Clients, configured_for_write
         self.log = log
-        self.enabled = db is not None or bool(config.SUPABASE_URL and config.SUPABASE_KEY)
+        self.enabled = repo is not None or configured_for_write()
+        self.alerts: list[dict] = []                     # stock mismatch 등 '확인 필요' (main 화면이 꺼내 감)
+        self._alock = threading.Lock()
         if not self.enabled:
-            log("Supabase 미설정 (.env 의 SUPABASE_URL·SUPABASE_KEY) → 재고 DB 연동 없이 실행")
+            log("Supabase 미설정 (.env 의 SUPABASE_URL·SUPABASE_SECRET_KEY) → 재고 DB 연동 없이 실행")
             return
-        self.worker = Worker(db or SupabaseREST(config.SUPABASE_URL, config.SUPABASE_KEY, config.SUPABASE_TIMEOUT), log)
-        self.queue_file = config.SUPABASE_QUEUE_FILE
+        self.repo = repo or Repository(Clients(), log)
+        self.worker = Worker(self.repo, log, self._alert)
+        self.outbox = Path(outbox or config.SUPABASE_QUEUE_FILE)
+        self._migrate_old_queue()
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.lock = threading.Lock()
         self.need_baseline = baseline
         self.confirm_here = config.SUPABASE_CONFIRM_MODE != "ipad"
 
-    # -- 실패 작업 보관 ---------------------------------------------------
-    def _load_queue(self) -> list[dict]:
-        if not self.queue_file.exists():
+    def _alert(self, a: dict) -> None:
+        with self._alock:
+            self.alerts.append(a)
+
+    # -- 대기열 (state/db_outbox.jsonl) -----------------------------------
+    def _migrate_old_queue(self) -> None:
+        old = Path(config.SUPABASE_OLD_QUEUE_FILE)
+        if old.exists() and old.resolve() != self.outbox.resolve():
+            jobs = self._load(old)
+            self._save(self._load(self.outbox) + jobs)
+            old.unlink()
+            self.log(f"DB: 예전 대기열 {len(jobs)}건을 {self.outbox} 로 옮김")
+
+    @staticmethod
+    def _load(path: Path) -> list[dict]:
+        if not path.exists():
             return []
-        return [json.loads(line) for line in self.queue_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
-    def _save_queue(self, jobs: list[dict]) -> None:
+    def _save(self, jobs: list[dict]) -> None:
         if jobs:
-            self.queue_file.parent.mkdir(parents=True, exist_ok=True)
-            self.queue_file.write_text("".join(json.dumps(j, ensure_ascii=False) + "\n" for j in jobs),
-                                       encoding="utf-8")
-        elif self.queue_file.exists():
-            self.queue_file.unlink()
+            self.outbox.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.outbox.with_suffix(".tmp")
+            tmp.write_text("".join(json.dumps(j, ensure_ascii=False) + "\n" for j in jobs), encoding="utf-8")
+            tmp.replace(self.outbox)
+        elif self.outbox.exists():
+            self.outbox.unlink()
 
-    def _send(self, new_jobs: list[dict]) -> None:
+    def outbox_count(self) -> int:
+        """DB 저장 대기 중인 작업 수."""
+        if not self.enabled or not self.outbox.exists():
+            return 0
+        return sum(1 for line in self.outbox.read_text(encoding="utf-8").splitlines() if line.strip())
+
+    def _send(self, new_jobs: list[dict]) -> int:
+        """예전에 실패한 작업부터 순서대로 보냄. 돌려주는 값: 아직 남은 작업 수."""
         with self.lock:
-            jobs = self._load_queue() + new_jobs          # 예전에 실패한 작업부터 순서대로
+            jobs = self._load(self.outbox) + new_jobs
             for i, job in enumerate(jobs):
                 try:
                     self.worker.run(job)
-                except (requests.RequestException, SupabaseError) as e:
-                    if isinstance(e, SupabaseError) and not e.retryable:
-                        self.log(f"Supabase: 작업 건너뜀 ({job['type']}): {e}")
+                except DbError as e:
+                    if not e.retryable:
+                        self.log(f"DB: 작업 건너뜀 ({job['type']} {job.get('result', {}).get('capture_id', '')}): {e}")
                         continue
-                    self._save_queue(jobs[i:])
-                    self.log(f"Supabase 전송 실패 → {len(jobs) - i}개 작업 보관 ({self.queue_file.name}), "
-                             f"다음에 다시 보냄: {e}")
-                    return
-            self._save_queue([])
+                    self._save(jobs[i:])
+                    self.log(f"DB 저장 대기 중 {len(jobs) - i}건 ({self.outbox.name}) — 다음 촬영 때 다시 보냄: {e}")
+                    return len(jobs) - i
+            self._save([])
+            return 0
 
     def _submit(self, jobs: list[dict]):
         jobs = json.loads(json.dumps(jobs, ensure_ascii=False, default=str))   # 지금 상태로 복사 (이후 변경 무시)
         fut = self.pool.submit(self._send, jobs)
-        fut.add_done_callback(lambda f: f.exception() and self.log(f"Supabase 동기화 오류: {f.exception()!r}"))
+        fut.add_done_callback(lambda f: f.exception() and self.log(f"DB 동기화 오류: {f.exception()!r}"))
         return fut
 
     # -- main.py 가 부르는 함수 ------------------------------------------
@@ -274,8 +187,9 @@ class InventorySync:
         jobs = []
         if self.need_baseline:
             self.need_baseline = False
-            jobs.append({"type": "baseline", "before": result.get("before", {}),
-                         "locations": result.get("before_locations", {})})
+            before = result.get("before", {})
+            jobs.append({"type": "baseline", "before": before, "locations": result.get("before_locations", {}),
+                         "names": {k: config.ITEMS[k]["name"] for k, n in before.items() if n and k in config.ITEMS}})
         jobs.append({"type": "capture", "result": result, "decision": None})
         return self._submit(jobs)
 
@@ -284,6 +198,28 @@ class InventorySync:
         if not self.enabled or not self.confirm_here:
             return None
         return self._submit([{"type": "capture", "result": result, "decision": decision}])
+
+    def flush(self) -> int:
+        """대기열만 지금 다시 보냄 (tools/flush_outbox.py). 돌려주는 값: 남은 작업 수."""
+        if not self.enabled:
+            return 0
+        return self._send([])
+
+    def reset_demo(self) -> int:
+        """데모 초기화 — 대기열을 먼저 비운 뒤(남은 작업이 초기화 뒤에 섞이지 않게) reset_demo() 실행."""
+        if not self.enabled:
+            raise RuntimeError("Supabase 미설정 (.env 의 SUPABASE_URL·SUPABASE_SECRET_KEY)")
+        with self.lock:
+            dropped = self.outbox_count()
+            self._save([])
+            if dropped:
+                self.log(f"DB: 데모 초기화 전에 대기열 {dropped}건을 버림")
+            return self.repo.reset_demo()
+
+    def pop_alerts(self) -> list[dict]:
+        with self._alock:
+            out, self.alerts = self.alerts, []
+        return out
 
     def close(self) -> None:
         if self.enabled:
